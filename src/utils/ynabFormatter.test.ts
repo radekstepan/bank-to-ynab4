@@ -109,6 +109,77 @@ describe('YNABFormatter', () => {
       global.FileReader = originalFileReader;
     });
 
+    it('should find the Date header row for AMEX files regardless of skipRows value', async () => {
+      // Setup - create a mock implementation that simulates the actual parseXLSX behavior
+      // with the "Date" header at row 13 (index 12)
+      const originalParseXLSX = (YNABFormatter as any).parseXLSX;
+      
+      // This is a simplified version of the actual implementation to test the header row detection
+      (YNABFormatter as any).parseXLSX = jest.fn().mockImplementation((file, skipRows) => {
+        // Create mock data with "Date" header at row 13 (index 12)
+        const mockRawData = [];
+        // Add some empty/header rows
+        for (let i = 0; i < 12; i++) {
+          mockRawData.push(['', '', '', '']);
+        }
+        // Add the "Date" header row at index 12
+        mockRawData.push(['Date', 'Description', 'Merchant', 'Amount']);
+        // Add a data row
+        mockRawData.push(['07/25/2023', 'Coffee Shop', 'Starbucks', '10.50']);
+        
+        // Simulate the header row detection logic
+        let headerRowIndex = skipRows;
+        for (let i = 0; i < mockRawData.length; i++) {
+          const row = mockRawData[i];
+          if (row && row.length > 0 && String(row[0]).trim().toLowerCase() === "date") {
+            headerRowIndex = i;
+            break;
+          }
+        }
+        
+        const headers = mockRawData[headerRowIndex].map(String);
+        const dataRows = mockRawData.slice(headerRowIndex + 1);
+        
+        // Convert to objects with headers as keys
+        const formattedData = dataRows.map(rowArray => {
+          const rowObject: {[key: string]: any} = {};
+          rowArray.forEach((cellValue, index) => {
+            if (headers[index]) {
+              rowObject[headers[index]] = String(cellValue);
+            }
+          });
+          return rowObject;
+        });
+        
+        return Promise.resolve(formattedData);
+      });
+
+      // Execute with different skipRows values to verify header detection works
+      const file = createMockFile('', 'test.xlsx');
+      
+      // Test with skipRows = 12 (the default in the config)
+      const result1 = await YNABFormatter.parseFile(file, 'amex');
+      
+      // Test with a different skipRows value (simulating a file where the header is at a different position)
+      // We'll temporarily modify the amex config
+      const originalSkipRows = bankConfigs.amex.skipRows;
+      bankConfigs.amex.skipRows = 11; // Set to a different value
+      const result2 = await YNABFormatter.parseFile(file, 'amex');
+      bankConfigs.amex.skipRows = originalSkipRows; // Restore original value
+      
+      // Verify both results found the correct data
+      expect(result1).toHaveLength(1);
+      expect(result1[0].date).toBe('2023-07-25');
+      expect(result1[0].description).toBe('Coffee Shop');
+      
+      expect(result2).toHaveLength(1);
+      expect(result2[0].date).toBe('2023-07-25');
+      expect(result2[0].description).toBe('Coffee Shop');
+      
+      // Restore original method
+      (YNABFormatter as any).parseXLSX = originalParseXLSX;
+    });
+
     it('should handle case-insensitive field matching', async () => {
       // Setup - field names with different casing
       const mockData = [

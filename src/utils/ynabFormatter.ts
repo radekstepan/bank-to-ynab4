@@ -67,7 +67,7 @@ export class YNABFormatter {
   }
 
   // Helper to format a YYYY-MM-DD date string to a desired output format string
-  private static formatDateForOutput(isoDate: string, formatKey?: string): string {
+  static formatDateForOutput(isoDate: string, formatKey?: string): string {
     if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
       // If isoDate is not in the expected YYYY-MM-DD format, return it as is.
       return isoDate;
@@ -204,12 +204,28 @@ export class YNABFormatter {
             return;
           }
 
-          const headerRowIndex = skipRows; 
+          // Find the header row by looking for the first row with "Date" in the first column
+          // This is particularly useful for AMEX imports where the header row position can vary
+          let headerRowIndex = skipRows; // Default to skipRows if no "Date" header is found
+          
+          // Only search for "Date" header if this is likely an AMEX file (based on skipRows value)
+          // This preserves behavior for other bank types
+          if (skipRows >= 10) { // AMEX typically has skipRows of 12 or 13
+            for (let i = 0; i < jsonDataRaw.length; i++) {
+              const row = jsonDataRaw[i];
+              if (row && row.length > 0 && String(row[0]).trim().toLowerCase() === "date") {
+                headerRowIndex = i;
+                break;
+              }
+            }
+          }
+          
           if (headerRowIndex >= jsonDataRaw.length) {
-             console.error("skipRows is too large, no data or header row found.");
+             console.error("Header row not found or skipRows is too large.");
              resolve([]);
              return;
           }
+          
           const headers: string[] = jsonDataRaw[headerRowIndex].map(String);
           const dataRows = jsonDataRaw.slice(headerRowIndex + 1);
 
