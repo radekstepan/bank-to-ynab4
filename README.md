@@ -1,7 +1,5 @@
 # 🏦 Bank to YNAB4 Converter 💰
 
-[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-
 A modern web application that converts bank statement files (CSV, XLS, XLSX) to YNAB4-compatible CSV format for easy importing into YNAB4 (You Need A Budget).
 
 ## ✨ Features
