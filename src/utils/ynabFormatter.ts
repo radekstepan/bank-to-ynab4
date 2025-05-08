@@ -34,9 +34,9 @@ interface BankParseConfig {
 // --- Define bank-specific configurations ---
 const bankConfigs: Record<string, BankParseConfig> = {
   eqbank: {
-    dateField: 'Transfer date', // CORRECTED: Matches CSV header
+    dateField: 'Transfer date', // Matches CSV header
     descriptionField: 'Description', // Matches CSV header
-    amountField: 'Amount',       // CORRECTED: Uses the single 'Amount' column
+    amountField: 'Amount',       // Uses the single 'Amount' column
     skipRows: 0, // First row is header
     dateFormat: 'DD MMM YYYY', // Input format hint (e.g., 07 MAY 2025)
     transformAmount: (_outflow?: string, _inflow?: string, amount?: string) => {
@@ -140,7 +140,7 @@ export class YNABFormatter {
       // Ensure dateValue and descriptionValue are present. Amount can be 0.
       if (dateValue === undefined || dateValue === null || String(dateValue).trim() === '' ||
           descriptionValue === undefined || descriptionValue === null || String(descriptionValue).trim() === '') {
-        console.warn(`Skipping row ${index + (config.skipRows || 0) + 2} due to missing date or description:`, row);
+        console.warn(`Skipping row ${index + (config.skipRows || 0) + 2} due to missing date or description:`, row); // +2 because row index is 0-based and we skip 1 header row
         return null;
       }
       
@@ -155,22 +155,13 @@ export class YNABFormatter {
   private static parseCSV(file: File, skipRows: number = 0): Promise<any[]> {
     return new Promise((resolve, reject) => {
       Papa.parse(file, {
-        header: true, // Uses the first row as keys
+        header: true, 
         skipEmptyLines: true,
-        // `preview: 0` is not needed if `skipRows` is handled after parsing all data.
-        // PapaParse's `header: true` means the first row *is* the header.
-        // `skipRows` in our context should mean data rows to skip *after* the header.
-        // So, if skipRows is > 0, we slice the data *after* PapaParse gives it to us.
-        // Currently, the `map` function implicitly handles if `skipRows` was meant for header data.
-        // For this CSV, skipRows: 0 is correct as the first row is headers.
         complete: (results) => {
           if (results.errors.length) {
             console.error("CSV Parsing errors:", results.errors.map(e => `Row ${e.row}: ${e.message} (${e.code})`).join('\n'));
-            // Depending on severity, you might reject or still resolve with partial data
           }
-          // If skipRows was meant to skip data rows *after* header, slice here:
-          // resolve(results.data.slice(skipRows));
-          resolve(results.data); // Assuming skipRows=0 for files where 1st row is header.
+          resolve(results.data); 
         },
         error: (error: Error) => {
           reject(error);
@@ -189,12 +180,9 @@ export class YNABFormatter {
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
           
-          let jsonData = XLSX.utils.sheet_to_json(worksheet, {
-            // header: 1, // To get array of arrays if manual header processing is needed
-            // defval: '', // Default value for empty cells
-          });
+          let jsonData = XLSX.utils.sheet_to_json(worksheet, {});
 
-          if (skipRows > 0) { // If skipRows is for data rows after header
+          if (skipRows > 0) { 
             jsonData = jsonData.slice(skipRows);
           }
           resolve(jsonData);
@@ -209,19 +197,33 @@ export class YNABFormatter {
 
   static convertToYNABTransactions(transactions: NormalizedTransaction[]): YNABTransaction[] {
     return transactions.map((transaction) => {
-      const outflow = transaction.amount < 0 ? Math.abs(transaction.amount).toFixed(2) : ""; // Empty string if 0
-      const inflow = transaction.amount > 0 ? transaction.amount.toFixed(2) : "";   // Empty string if 0
+      // Amount formatting (positive for YNAB's Inflow/Outflow)
+      const outflowValue = transaction.amount < 0 ? Math.abs(transaction.amount).toFixed(2) : "";
+      const inflowValue = transaction.amount > 0 ? transaction.amount.toFixed(2) : "";
 
-      // Ensure one of them is populated if amount is non-zero, YNAB might prefer "0.00"
-      const finalOutflow = (transaction.amount < 0) ? Math.abs(transaction.amount).toFixed(2) : (transaction.amount === 0 && inflow === "" ? "0.00" : "");
-      const finalInflow = (transaction.amount > 0) ? transaction.amount.toFixed(2) : (transaction.amount === 0 && outflow === "" ? "0.00" : "");
+      // Ensure one of outflow/inflow is "0.00" if amount is 0, otherwise empty string
+      // YNAB typically prefers an empty string if there's no inflow/outflow, rather than "0.00" unless both are 0.
+      // If YNAB requires "0.00" for zero amounts, this logic can be adjusted.
+      // For now, sticking to "" for non-applicable flow and actual value for applicable flow.
+      let finalOutflow = "";
+      let finalInflow = "";
 
+      if (transaction.amount < 0) {
+        finalOutflow = Math.abs(transaction.amount).toFixed(2);
+      } else if (transaction.amount > 0) {
+        finalInflow = transaction.amount.toFixed(2);
+      } else { // transaction.amount is 0
+        // YNAB often just needs one value, or both can be empty if truly zero.
+        // If you must have a 0.00, pick one:
+        // finalOutflow = "0.00"; 
+        // Or leave both blank which is also usually fine for YNAB for $0 transactions
+      }
 
       return {
-        Date: transaction.date,
-        Payee: transaction.description,
-        Category: '', 
-        Memo: '',     
+        Date: transaction.date,        // Original date
+        Payee: "",                     // MODIFIED: Payee is now blank
+        Category: "",                  // MODIFIED: Category is now blank
+        Memo: transaction.description, // MODIFIED: Original description goes into Memo
         Outflow: finalOutflow,
         Inflow: finalInflow,
       };
@@ -231,7 +233,7 @@ export class YNABFormatter {
   static generateYNABCSVString(ynabTransactions: YNABTransaction[]): string {
     const worksheet = XLSX.utils.json_to_sheet(ynabTransactions, {
       header: ['Date', 'Payee', 'Category', 'Memo', 'Outflow', 'Inflow'], 
-      skipHeader: true, 
+      skipHeader: true, // We prepend our own header string
     });
     const csvString = XLSX.utils.sheet_to_csv(worksheet);
     return `${YNAB_CSV_HEADER}\n${csvString}`;
