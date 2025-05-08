@@ -24,6 +24,10 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'info' | 'success' | 'error' | 'warning', text: string} | null>(null);
 
+  // Add state for swapPayeesMemos to inform the preview
+  const [swapPayeesMemos, setSwapPayeesMemos] = useState(false);
+
+
   const totalTransactions = parsedTransactions.length;
 
   const availableBankOptions = Object.keys(bankConfigs)
@@ -45,7 +49,7 @@ export default function App() {
   const processAndSetTransactions = async (
     fileToParse: File, 
     accountToUse: string, 
-    inputFileDateFormatSetting: string, 
+    inputFileDateFormatSetting: string, // This is used as a hint for date parsing
     isReparse: boolean = false
   ) => {
     if (!accountToUse && availableBankOptions.length > 0) {
@@ -67,18 +71,15 @@ export default function App() {
     setParsedTransactions([]); 
 
     try {
-        let formatHint = '';
-        if (inputFileDateFormatSetting === 'Day/Month/Year') formatHint = 'DD/MM/YYYY';
-        else if (inputFileDateFormatSetting === 'Month/Day/Year') formatHint = 'MM/DD/YYYY';
-        else if (inputFileDateFormatSetting === 'Year/Month/Day') formatHint = 'YYYY/MM/DD';
-
-        const transactions = await YNABFormatter.parseFile(fileToParse, accountToUse, formatHint);
+        // The inputFileDateFormatSetting is passed to parseFile as a hint.
+        // The actual bankConfig.dateFormat is also considered within parseFile.
+        const transactions = await YNABFormatter.parseFile(fileToParse, accountToUse, inputFileDateFormatSetting);
 
         if (transactions.length === 0) {
             setParsedTransactions([]);
             setStatusMessage({
                 type: 'warning',
-                text: `No transactions found in ${fileToParse.name} with current settings. Check file, bank, or input date format.`
+                text: `No transactions found in ${fileToParse.name} with current settings. Check file, bank selection, input date format, or bank configuration (skipRows, field names).`
             });
         } else {
             setParsedTransactions(transactions);
@@ -103,8 +104,7 @@ export default function App() {
       if (file.name.endsWith('.csv') || file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
         setSelectedFile(file); 
         setSelectedFileName(file.name);
-        // Note: outputDateFormat is passed as inputFileDateFormatSetting here. This maintains existing behavior
-        // for input parsing hint, though ideally input and output formats are fully decoupled.
+        // Use selectedAccount and outputDateFormat (as date parsing hint) for initial processing
         await processAndSetTransactions(file, selectedAccount, outputDateFormat, false);
       } else {
         setSelectedFile(null);
@@ -127,17 +127,17 @@ export default function App() {
     console.log('Importing transactions with settings:', {
       selectedAccount,
       outputDateFormat, 
+      swapPayeesMemos, 
       transactionsCount: parsedTransactions.length,
-      fieldMapping: "Description to Memo, Payee blank"
     });
 
     const transactionsToImport = parsedTransactions;
 
     try {
       const ynabConvertOptions: ConvertToYNABOptions = {
-        importMemos: true,      
-        swapPayeesMemos: false,
-        outputDateFormat: outputDateFormat // Pass the selected output date format
+        importMemos: true, 
+        swapPayeesMemos: swapPayeesMemos,
+        outputDateFormat: outputDateFormat // This is for formatting the date in the final CSV
       };
       const ynabTransactions = YNABFormatter.convertToYNABTransactions(transactionsToImport, ynabConvertOptions);
       const ynabCsvString = YNABFormatter.generateYNABCSVString(ynabTransactions);
@@ -169,35 +169,25 @@ export default function App() {
     setParsedTransactions([]);
     setStatusMessage(null);
     setIsProcessing(false);
+    setSwapPayeesMemos(false); 
   };
 
   const formatDateForDisplay = (isoDate: string): string => {
     try {
-        // Assuming isoDate is expected to be in YYYY-MM-DD format from normalization
         const parts = isoDate.split('-');
-        if (parts.length !== 3) return isoDate; // Not YYYY-MM-DD
-
+        if (parts.length !== 3) return isoDate; 
         const year = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10); // 1-indexed month
+        const month = parseInt(parts[1], 10); 
         const day = parseInt(parts[2], 10);
-
         if (isNaN(year) || isNaN(month) || isNaN(day)) return isoDate;
-        
-        // Create a Date object specifically using UTC to avoid timezone shifts
-        const d = new Date(Date.UTC(year, month - 1, day)); // month-1 for 0-indexed month in constructor
-        
-        // Validate if the constructed date matches the input parts (e.g. for invalid dates like 2023-02-30)
+        const d = new Date(Date.UTC(year, month - 1, day)); 
         if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
-            return isoDate; // Invalid date components
+            return isoDate; 
         }
-        
         if (isNaN(d.getTime())) return isoDate;
-
         const displayDay = String(d.getUTCDate()).padStart(2, '0');
-        const displayMonth = String(d.getUTCMonth() + 1).padStart(2, '0'); // Back to 1-indexed for display
+        const displayMonth = String(d.getUTCMonth() + 1).padStart(2, '0'); 
         const displayYear = String(d.getUTCFullYear()); 
-
-        // Use Day/Month/Year format by default for preview display
         return `${displayDay}/${displayMonth}/${displayYear}`;
     } catch (e) {
         console.error("Error formatting date for display:", e, "Input was:", isoDate);
@@ -254,10 +244,9 @@ export default function App() {
                  </div>
             )}
 
-            {parsedTransactions.length > 0 && !isProcessing && (
+            {selectedFile && (
               <>
-                {/* Settings Area: Bank Account, Output Date Format */}
-                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 items-start">
+                <div className={`mt-6 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 items-start ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
                   <div>
                     <label htmlFor="bankAccount" className="block text-sm font-medium text-slate-700 mb-1">Importing from Account:</label>
                     <div className="relative">
@@ -268,7 +257,7 @@ export default function App() {
                                 const newAccount = e.target.value;
                                 setSelectedAccount(newAccount); 
                                 if (selectedFile) {
-                                    // Note: outputDateFormat is passed as inputFileDateFormatSetting here.
+                                    // Re-process with the new bank and current date format hint
                                     await processAndSetTransactions(selectedFile, newAccount, outputDateFormat, true);
                                 } else {
                                      if (statusMessage && statusMessage.text.includes("Please select a valid bank account type first.")) {
@@ -294,16 +283,18 @@ export default function App() {
                   </div>
                   
                   <div>
-                    <label htmlFor="outputDateFormatSelect" className="block text-sm font-medium text-slate-700 mb-1">Output File Date Format:</label>
+                    <label htmlFor="outputDateFormatSelect" className="block text-sm font-medium text-slate-700 mb-1">Date Format (for parsing & output):</label>
                     <div className="relative">
                       <select
-                        id="outputDateFormatSelect"
+                        id="outputDateFormatSelect" // ID suggests output, but it's also used as a parsing hint
                         value={outputDateFormat} 
                         onChange={(e) => { 
-                            const newOutputDateFormat = e.target.value;
-                            setOutputDateFormat(newOutputDateFormat); 
-                            // FIX: Removed re-parsing call to prevent UI reload on output format change.
-                            // The change to outputDateFormat will be picked up during the CSV generation (handleImport).
+                            const newDateFormat = e.target.value;
+                            setOutputDateFormat(newDateFormat); 
+                            if (selectedFile && selectedAccount) {
+                                // Re-process if user changes date format, as it's used as a parsing hint
+                                processAndSetTransactions(selectedFile, selectedAccount, newDateFormat, true);
+                            }
                         }}
                         disabled={isProcessing}
                         className="w-full p-2.5 text-slate-700 bg-white border border-slate-400 rounded-md shadow-sm outline-none appearance-none focus:border-blue-500"
@@ -314,48 +305,94 @@ export default function App() {
                       </select>
                       <ChevronDown className="w-5 h-5 text-slate-500 absolute top-1/2 right-3 -translate-y-1/2 pointer-events-none" />
                     </div>
+                     <p className="text-xs text-slate-500 mt-1">Used for YNAB output CSV and as a hint for parsing input file dates if bank-specific format is not precise.</p>
                   </div>
 
+                  <div className="md:col-span-2">
+                    <label htmlFor="swapPayeeMemo" className="flex items-center text-sm font-medium text-slate-700">
+                      <input
+                        type="checkbox"
+                        id="swapPayeeMemo"
+                        checked={swapPayeesMemos}
+                        onChange={(e) => setSwapPayeesMemos(e.target.checked)}
+                        disabled={isProcessing}
+                        className="h-4 w-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 mr-2"
+                      />
+                      Use Description as Payee (if no dedicated Payee field)
+                    </label>
+                    <p className="text-xs text-slate-500 mt-1">
+                      If bank config has a 'Payee Field' (e.g., AMEX 'Merchant'), that field's value is used for Payee.
+                      This swap option applies if no such dedicated Payee field is configured for the selected bank.
+                    </p>
+                  </div>
                 </div>
 
+                {parsedTransactions.length > 0 && !isProcessing && (
+                  <div className="mt-6">
+                    <h2 className="text-xl font-semibold text-slate-700 mb-1">Import Preview</h2>
+                    <p className="text-xs text-slate-600 mb-2">
+                      Preview based on selected options.
+                    </p>
+                    <div className="border border-slate-400 rounded-md overflow-hidden">
+                      <div className="max-h-60 overflow-y-auto">
+                        <table className="min-w-full divide-y divide-slate-300">
+                          <thead className="bg-slate-600 sticky top-0">
+                            <tr>
+                              {['Date', 'Payee', 'Memo', 'Amount'].map((header) => (
+                                <th
+                                  key={header}
+                                  scope="col"
+                                  className="px-4 py-2.5 text-left text-xs font-medium text-white uppercase tracking-wider"
+                                >
+                                  {header}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="bg-white divide-y divide-slate-300">
+                            {parsedTransactions.map((tx, index) => {
+                                let previewPayee: React.ReactNode = tx.payee || "";
+                                let previewMemo: React.ReactNode = tx.description;
 
-                <div className="mt-6">
-                  <h2 className="text-xl font-semibold text-slate-700 mb-1">Import Preview</h2>
-                  <p className="text-xs text-slate-600 mb-2">Bank's 'Description' will be imported as 'Memo'. 'Payee' and 'Category' will be blank.</p>
-                  <div className="border border-slate-400 rounded-md overflow-hidden">
-                    <div className="max-h-60 overflow-y-auto">
-                      <table className="min-w-full divide-y divide-slate-300">
-                        <thead className="bg-slate-600 sticky top-0">
-                          <tr>
-                            {['Date', 'Payee (Blank)', 'Memo (from Description)', 'Amount'].map((header) => (
-                              <th
-                                key={header}
-                                scope="col"
-                                className="px-4 py-2.5 text-left text-xs font-medium text-white uppercase tracking-wider"
-                              >
-                                {header}
-                              </th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-slate-300">
-                          {parsedTransactions.map((tx, index) => (
-                                <tr key={index} className="hover:bg-slate-50">
-                                <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-600">{formatDateForDisplay(tx.date)}</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-500 italic">(Blank)</td>
-                                <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-800 font-medium">{tx.description}</td>
-                                <td className={`px-4 py-2.5 whitespace-nowrap text-sm text-right ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                    {tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                      </table>
+                                if (!tx.payee && swapPayeesMemos) {
+                                    previewPayee = tx.description;
+                                    previewMemo = ""; 
+                                } else if (tx.payee) { 
+                                    // If tx.payee is present (from a payeeField in config), description is always memo,
+                                    // regardless of swapPayeesMemos (as per convertToYNABTransactions logic)
+                                    previewMemo = tx.description;
+                                }
+
+
+                                if (previewPayee === "") {
+                                    previewPayee = <span className="italic text-slate-500">(Blank)</span>;
+                                }
+                                if (previewMemo === "") {
+                                     previewMemo = <span className="italic text-slate-500">(Blank)</span>;
+                                }
+
+
+                                return (
+                                    <tr key={index} className="hover:bg-slate-50">
+                                    <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-600">{formatDateForDisplay(tx.date)}</td>
+                                    <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-800 font-medium">{previewPayee}</td>
+                                    <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-800">{previewMemo}</td>
+                                    <td className={`px-4 py-2.5 whitespace-nowrap text-sm text-right ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        {/* Display amount as it is in normalized transaction (negative for outflow, positive for inflow) */}
+                                        {/* YNAB conversion will handle splitting into Outflow/Inflow columns */}
+                                        {tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    </tr>
+                                );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
                 
-                <div className="mt-8 pt-6 border-t border-slate-300 flex justify-end space-x-3">
+                <div className={`mt-8 pt-6 border-t border-slate-300 flex justify-end space-x-3 ${isProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
                   <StyledButton
                     type="button"
                     onClick={handleCancel}
@@ -376,7 +413,7 @@ export default function App() {
                 </div>
               </>
             )}
-            {parsedTransactions.length === 0 && !selectedFile && !isProcessing && (
+            {!selectedFile && !isProcessing && (
                  <div className="mt-6 p-4 text-center text-slate-500">
                     <p>Please select a bank statement file to begin.</p>
                 </div>

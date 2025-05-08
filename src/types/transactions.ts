@@ -3,6 +3,7 @@ export interface NormalizedTransaction {
   date: string; // Should be in YYYY-MM-DD format after parsing
   description: string;
   amount: number; // Positive for inflow, negative for outflow
+  payee?: string; // Optional: if bank data includes a specific payee/merchant
   // checkNum?: string; // Optional: if bank data includes it
 }
 
@@ -21,6 +22,7 @@ export interface BankParseConfig {
   label: string; // User-friendly label for dropdown
   dateField: string;
   descriptionField: string;
+  payeeField?: string;   // Optional: Field name for Payee/Merchant
   outflowField?: string; 
   inflowField?: string;  
   amountField?: string;  

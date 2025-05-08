@@ -11,6 +11,8 @@ A modern web application that converts bank statement files (CSV, XLS, XLSX) to 
 - 🖥️ Works entirely in your browser - no data is sent to any server
 - 🎨 Clean, responsive UI built with React and TailwindCSS
 
+![Screenshot](screenshot.png)
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -77,9 +79,8 @@ The built files will be in the `dist` directory, ready to be deployed to any sta
 ## 🏦 Supported Banks
 
 Currently supported bank formats:
-- EQ Bank (CSV/XLSX)
-- Generic CSV/XLSX with Date, Description, Amount columns (DD/MM/YYYY format)
-- Generic CSV/XLSX with Date, Description, Amount columns (MM/DD/YYYY format)
+- EQ Bank (CSV)
+- AMEX (XLS)
 
 ## 🧩 Adding New Bank Formats
 
@@ -93,7 +94,7 @@ export const bankConfigs: Record<string, BankParseConfig> = {
   // Existing configurations...
   
   your_bank_name: {
-    label: 'Your Bank Name (CSV/XLSX)',
+    label: 'Your Bank Name (CSV/XLS)',
     dateField: 'Date Field Name in Statement',
     descriptionField: 'Description Field Name in Statement',
     amountField: 'Amount Field Name in Statement',

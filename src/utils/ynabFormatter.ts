@@ -6,6 +6,25 @@ import { bankConfigs } from '../config/bankConfigs';
 // YNAB CSV Header (used by XLSX.utils.json_to_sheet's header option)
 export const YNAB_CSV_HEADER_ARRAY = ['Date', 'Payee', 'Category', 'Memo', 'Outflow', 'Inflow'];
 
+// Helper function to get row value with case-insensitive header matching
+function getRowValue(row: any, fieldNameFromConfig?: string): any {
+  if (!fieldNameFromConfig || typeof fieldNameFromConfig !== 'string') return undefined;
+  
+  // Try exact match first (common and faster)
+  if (row.hasOwnProperty(fieldNameFromConfig)) {
+    return row[fieldNameFromConfig];
+  }
+  
+  // Try case-insensitive match if exact match fails
+  const lowerConfigField = fieldNameFromConfig.toLowerCase();
+  for (const key in row) {
+    if (row.hasOwnProperty(key) && typeof key === 'string' && key.toLowerCase() === lowerConfigField) {
+      return row[key];
+    }
+  }
+  return undefined; // Field not found
+}
+
 export class YNABFormatter {
   // Parses input date string based on hint and standardizes to YYYY-MM-DD
   private static formatDate(dateString: string, inputFormatHint?: string): string {
@@ -93,22 +112,24 @@ export class YNABFormatter {
     }
     
     const transactions = rawData.slice(fileExtension === 'csv' ? (config.skipRows || 0) : 0).map((row: any, index: number) => {
-      const dateValue = row[config.dateField];
-      const descriptionValue = row[config.descriptionField];
+      // Use getRowValue for case-insensitive access
+      const dateValue = getRowValue(row, config.dateField);
+      const descriptionValue = getRowValue(row, config.descriptionField);
+      const payeeValue = config.payeeField ? getRowValue(row, config.payeeField) : undefined;
       
       let amount: number = 0;
       if (config.transformAmount) {
-        const amountArg = config.amountField ? String(row[config.amountField]) : undefined;
-        const outflowArg = config.outflowField ? String(row[config.outflowField]) : undefined;
-        const inflowArg = config.inflowField ? String(row[config.inflowField]) : undefined;
+        const amountArg = config.amountField ? String(getRowValue(row, config.amountField)) : undefined;
+        const outflowArg = config.outflowField ? String(getRowValue(row, config.outflowField)) : undefined;
+        const inflowArg = config.inflowField ? String(getRowValue(row, config.inflowField)) : undefined;
         amount = config.transformAmount(outflowArg, inflowArg, amountArg);
       } else if (config.amountField) {
-        const rawAmount = row[config.amountField];
+        const rawAmount = getRowValue(row, config.amountField);
         const cleanedAmount = typeof rawAmount === 'string' ? rawAmount.replace(/[^0-9.-]/g, '') : String(rawAmount);
         amount = parseFloat(cleanedAmount) || 0;
       } else if (config.outflowField && config.inflowField) {
-        const outflow = row[config.outflowField];
-        const inflow = row[config.inflowField];
+        const outflow = getRowValue(row, config.outflowField);
+        const inflow = getRowValue(row, config.inflowField);
         const outflowNum = parseFloat(String(outflow).replace(/[^0-9.-]/g, '')) || 0;
         const inflowNum = parseFloat(String(inflow).replace(/[^0-9.-]/g, '')) || 0;
         amount = inflowNum - outflowNum;
@@ -120,17 +141,23 @@ export class YNABFormatter {
         return null;
       }
       
-      return {
+      const normalizedTx: NormalizedTransaction = {
         date: this.formatDate(String(dateValue), effectiveDateFormat), // Standardizes to YYYY-MM-DD
         description: String(descriptionValue).trim(),
         amount: amount,
       };
+
+      if (payeeValue !== undefined && payeeValue !== null && String(payeeValue).trim() !== '') {
+        normalizedTx.payee = String(payeeValue).trim();
+      }
+      
+      return normalizedTx;
     }).filter(Boolean) as NormalizedTransaction[];
     
     if (transactions.length === 0 && rawData.length > 0) {
-        console.warn("File parsed but no valid transactions extracted. Check field names in bank config and file structure.");
-        console.log("Raw data sample (first few rows):", rawData.slice(0,5));
-        console.log("Expected field names from config:", {date: config.dateField, desc: config.descriptionField, amt: config.amountField});
+        console.warn("File parsed but no valid transactions extracted. Check field names in bank config (case-insensitive matching is attempted), file structure, skipRows setting, and transformAmount logic.");
+        console.log("Raw data sample (first few rows with detected headers):", rawData.slice(0,5));
+        console.log("Expected field names from config (will be matched case-insensitively):", {date: config.dateField, desc: config.descriptionField, payee: config.payeeField, amt: config.amountField, outflow: config.outflowField, inflow: config.inflowField });
     }
     return transactions;
   }
@@ -189,7 +216,7 @@ export class YNABFormatter {
           const formattedJsonData = dataRows.map(rowArray => {
             const rowObject: {[key: string]: any} = {};
             rowArray.forEach((cellValue, index) => {
-                if (headers[index]) {
+                if (headers[index]) { // Ensure header exists for this column
                     // If cellDates:true parsed it as a Date object
                     if (cellValue instanceof Date) {
                         // Convert to YYYY-MM-DD string using UTC to avoid timezone issues
@@ -224,23 +251,37 @@ export class YNABFormatter {
       let finalMemo = "";
       const description = transaction.description;
 
+      // Determine Payee
+      if (transaction.payee) { // Payee from normalized transaction (via payeeField) takes precedence
+        finalPayee = transaction.payee;
+      } else if (options.importMemos && options.swapPayeesMemos) {
+        finalPayee = description; // If no payeeField, and swap is on, description becomes Payee
+      }
+      // else finalPayee remains "" (blank)
+
+      // Determine Memo
       if (options.importMemos) {
-        if (options.swapPayeesMemos) {
-          finalPayee = description;
+        if (transaction.payee) {
+          // If Payee came from payeeField, Description always goes to Memo
+          finalMemo = description;
+        } else if (options.swapPayeesMemos) {
+          // If no payeeField and swap is on, Description became Payee, so Memo is blank
+          finalMemo = ""; 
         } else {
+          // If no payeeField and swap is off, Description is Memo
           finalMemo = description;
         }
       }
+      // else finalMemo remains "" (blank if importMemos is false)
 
+      // transaction.amount: negative for charges/outflows, positive for payments/inflows (after transformAmount)
       const finalOutflow = transaction.amount < 0 ? Math.abs(transaction.amount).toFixed(2) : "";
       const finalInflow = transaction.amount > 0 ? transaction.amount.toFixed(2) : "";
       
-      // FIX: Format date based on outputDateFormat option
-      // transaction.date is already in YYYY-MM-DD format from parseFile/formatDate
       const ynabDate = YNABFormatter.formatDateForOutput(transaction.date, options.outputDateFormat);
 
       return {
-        Date: ynabDate, // Use the date formatted for output
+        Date: ynabDate,
         Payee: finalPayee,
         Category: "", 
         Memo: finalMemo,
@@ -251,7 +292,6 @@ export class YNABFormatter {
   }
 
   static generateYNABCSVString(ynabTransactions: YNABTransaction[]): string {
-    // Data is already prepared with correctly formatted dates by convertToYNABTransactions
     const dataForSheet = ynabTransactions.map(tx => ({
         Date: tx.Date, 
         Payee: tx.Payee,
@@ -262,11 +302,10 @@ export class YNABFormatter {
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(dataForSheet, {
-      header: YNAB_CSV_HEADER_ARRAY, // Use the defined header order
-      skipHeader: false, // json_to_sheet creates the header row
+      header: YNAB_CSV_HEADER_ARRAY,
+      skipHeader: false, 
     });
     
-    // Generate CSV string. XLSX.utils.sheet_to_csv prepends a BOM by default.
     const csvString = XLSX.utils.sheet_to_csv(worksheet, { FS: ','}); 
     return csvString; 
   }
