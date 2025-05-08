@@ -14,8 +14,7 @@
     "ynab",
     "converter"
   ],
-  "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
     "lucide-react": "^0.300.0",
     "papaparse": "^5.4.1",

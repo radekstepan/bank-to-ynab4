@@ -24,7 +24,7 @@ A modern web application that converts bank statement files (CSV, XLS, XLSX) to 
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/bank-to-ynab4.git
+   git clone https://github.com/radekstepan/bank-to-ynab4.git
    cd bank-to-ynab4
    ```
 
@@ -128,7 +128,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📄 License
 
-This project is licensed under the ISC License - see the LICENSE file for details.
+This project is licensed under the MIT License.
 
 ## 🙏 Acknowledgements
 
