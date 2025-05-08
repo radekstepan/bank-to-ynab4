@@ -11,7 +11,7 @@ export interface NormalizedTransaction {
 
 // YNAB's expected transaction structure for CSV import
 export interface YNABTransaction {
-  Date: string;      // YYYY-MM-DD or MM/DD/YYYY or DD/MM/YYYY
+  Date: string;      // Format depends on outputDateFormat option (e.g., DD/MM/YYYY)
   Payee: string;
   Category: string;  // Optional, can be empty
   Memo: string;      // Optional, can be empty
@@ -33,7 +33,6 @@ export interface BankParseConfig {
 }
 
 // --- Define bank-specific configurations ---
-// Add a 'label' field for UI display
 export const bankConfigs: Record<string, BankParseConfig> = {
   eqbank: {
     label: 'EQ Bank (CSV/XLSX)',
@@ -75,49 +74,79 @@ export const bankConfigs: Record<string, BankParseConfig> = {
   }
 };
 
-// YNAB CSV Header
-export const YNAB_CSV_HEADER = "Date,Payee,Category,Memo,Outflow,Inflow";
+// YNAB CSV Header (used by XLSX.utils.json_to_sheet's header option)
+export const YNAB_CSV_HEADER_ARRAY = ['Date', 'Payee', 'Category', 'Memo', 'Outflow', 'Inflow'];
 
 export interface ConvertToYNABOptions {
   importMemos: boolean;
   swapPayeesMemos: boolean;
+  outputDateFormat?: string; // e.g., "Day/Month/Year", "Month/Day/Year", "Year/Month/Day"
 }
 
 export class YNABFormatter {
+  // Parses input date string based on hint and standardizes to YYYY-MM-DD
   private static formatDate(dateString: string, inputFormatHint?: string): string {
     let dateObj: Date;
 
-    // Prioritize specific format hints if provided and they match the pattern
+    // Prioritize specific format hints if provided
     if (inputFormatHint === 'DD/MM/YYYY' && /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(dateString)) {
         const parts = dateString.split(/[\/\-.]/);
-        dateObj = new Date(parseInt(parts[2].length === 2 ? '20' + parts[2] : parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+        const yearPart = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+        dateObj = new Date(Date.UTC(parseInt(yearPart), parseInt(parts[1]) - 1, parseInt(parts[0])));
     } else if (inputFormatHint === 'MM/DD/YYYY' && /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(dateString)) {
         const parts = dateString.split(/[\/\-.]/);
-        dateObj = new Date(parseInt(parts[2].length === 2 ? '20' + parts[2] : parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+        const yearPart = parts[2].length === 2 ? '20' + parts[2] : parts[2];
+        dateObj = new Date(Date.UTC(parseInt(yearPart), parseInt(parts[0]) - 1, parseInt(parts[1])));
     } else if (inputFormatHint === 'YYYY/MM/DD' && /^\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}$/.test(dateString)) {
         const parts = dateString.split(/[\/\-.]/);
-        dateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        dateObj = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
     } else {
-       // Fallback to direct parsing for other formats like 'DD MMM YYYY' or ISO
+       // Fallback to direct parsing for other formats (e.g. ISO, 'DD MMM YYYY')
+       // Date constructor handles many formats; UTC is used later to extract parts
        dateObj = new Date(dateString);
-       // If direct parsing failed and it looks like a common Excel date number
-       if (isNaN(dateObj.getTime()) && /^\d{5}$/.test(dateString)) { // Check if it's an Excel serial date number
+       // If direct parsing failed and it looks like an Excel date number
+       if (isNaN(dateObj.getTime()) && /^\d{5}$/.test(dateString)) {
          const excelSerialDate = parseInt(dateString, 10);
-         // Excel serial date is days since 1899-12-30 (for Windows Excel)
-         const baseDate = new Date(1899, 11, 30); // December 30, 1899
+         const baseDate = new Date(Date.UTC(1899, 11, 30)); // Excel base date for serial numbers
          dateObj = new Date(baseDate.getTime() + excelSerialDate * 24 * 60 * 60 * 1000);
        }
     }
 
     if (isNaN(dateObj.getTime())) {
       console.warn(`Could not parse date: "${dateString}" with inputFormatHint: "${inputFormatHint}". Falling back to original string.`);
-      return dateString; 
+      return dateString; // Return original string if parsing failed
     }
     
-    const year = dateObj.getFullYear();
-    const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
-    const day = dateObj.getDate().toString().padStart(2, '0');
-    return `${year}-${month}-${day}`; // Standardize to YYYY-MM-DD for internal use
+    // Standardize to YYYY-MM-DD for internal use, using UTC parts
+    const year = dateObj.getUTCFullYear();
+    const month = (dateObj.getUTCMonth() + 1).toString().padStart(2, '0');
+    const day = dateObj.getUTCDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // Helper to format a YYYY-MM-DD date string to a desired output format string
+  private static formatDateForOutput(isoDate: string, formatKey?: string): string {
+    if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+      // If isoDate is not in the expected YYYY-MM-DD format, return it as is.
+      return isoDate;
+    }
+    const parts = isoDate.split('-');
+    const year = parts[0];
+    const month = parts[1];
+    const day = parts[2];
+
+    switch (formatKey) {
+      case 'Day/Month/Year': // DD/MM/YYYY
+        return `${day}/${month}/${year}`;
+      case 'Month/Day/Year': // MM/DD/YYYY
+        return `${month}/${day}/${year}`;
+      case 'Year/Month/Day': // YYYY/MM/DD
+        return `${year}/${month}/${day}`; // Outputting with slashes for consistency with other options
+      default:
+        // Default to YYYY-MM-DD if no specific formatKey or an unrecognized one is provided
+        // YNAB often accepts YYYY-MM-DD directly.
+        return isoDate; 
+    }
   }
 
 
@@ -130,23 +159,16 @@ export class YNABFormatter {
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
     let rawData: any[];
 
-    // Use UI hint if provided, otherwise fallback to bank config's date format
     const effectiveDateFormat = uiDateFormatHint || config.dateFormat;
 
     if (fileExtension === 'csv') {
-      rawData = await this.parseCSV(file); // CSV parsing usually gets headers right
+      rawData = await this.parseCSV(file); 
     } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
       rawData = await this.parseXLSX(file, config.skipRows);
     } else {
       throw new Error('Unsupported file type. Please upload CSV, XLS, or XLSX.');
     }
     
-    // Data might have an effective skipRows applied if headers are not on the first line for XLSX
-    // For CSV, PapaParse's `header: true` handles the first line as header.
-    // If config.skipRows is > 0 for CSV, it implies more lines to skip *after* the header.
-    // This logic might need refinement if CSVs have multiple pre-header rows.
-    // For now, assuming PapaParse handles CSV header row, and config.skipRows applies to XLSX content rows.
-
     const transactions = rawData.slice(fileExtension === 'csv' ? (config.skipRows || 0) : 0).map((row: any, index: number) => {
       const dateValue = row[config.dateField];
       const descriptionValue = row[config.descriptionField];
@@ -176,7 +198,7 @@ export class YNABFormatter {
       }
       
       return {
-        date: this.formatDate(String(dateValue), effectiveDateFormat),
+        date: this.formatDate(String(dateValue), effectiveDateFormat), // Standardizes to YYYY-MM-DD
         description: String(descriptionValue).trim(),
         amount: amount,
       };
@@ -195,11 +217,10 @@ export class YNABFormatter {
       Papa.parse(file, {
         header: true, 
         skipEmptyLines: true,
-        dynamicTyping: false, // Keep all as strings initially to avoid type issues before specific parsing
+        dynamicTyping: false, 
         complete: (results) => {
           if (results.errors.length) {
             console.error("CSV Parsing errors:", results.errors.map(e => `Row ${e.row}: ${e.message} (${e.code})`).join('\n'));
-            // Depending on severity, might still resolve results.data or reject
           }
           resolve(results.data as any[]); 
         },
@@ -216,45 +237,45 @@ export class YNABFormatter {
       reader.onload = (event) => {
         try {
           const data = new Uint8Array(event.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array', cellDates: true, dateNF:'yyyy-mm-dd'}); // Attempt to get dates as JS Dates
+          // cellDates:true attempts to parse dates, dateNF applies if they are numbers
+          const workbook = XLSX.read(data, { type: 'array', cellDates: true, dateNF:'yyyy-mm-dd'}); 
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
           
-          // For XLSX, if skipRows is provided, we adjust the range or process the JSON later.
-          // sheet_to_json respects `range` option if header is not 0.
-          // Simpler to slice after conversion if header is always row 0 effectively for sheet_to_json.
-          const jsonData = XLSX.utils.sheet_to_json(worksheet, {
-            raw: false, // format values (e.g. dates)
-            header: 1, // Get array of arrays first to handle headers manually if needed
-            // defval: "" // default value for empty cells
+          // Get array of arrays to manually handle headers after skipping rows
+          const jsonDataRaw: any[][] = XLSX.utils.sheet_to_json(worksheet, {
+            raw: false, // Format values (e.g. dates, numbers)
+            header: 1,  // Output as array of arrays
+            defval: ""  // Default value for empty cells
           });
 
-          if (!jsonData || jsonData.length === 0) {
+          if (!jsonDataRaw || jsonDataRaw.length === 0) {
             resolve([]);
             return;
           }
 
-          // Effective header row after skipping initial non-data rows
           const headerRowIndex = skipRows; 
-          if (headerRowIndex >= jsonData.length) {
+          if (headerRowIndex >= jsonDataRaw.length) {
              console.error("skipRows is too large, no data or header row found.");
              resolve([]);
              return;
           }
-          const headers: string[] = (jsonData[headerRowIndex] as any[]).map(String);
-          const dataRows = jsonData.slice(headerRowIndex + 1);
+          const headers: string[] = jsonDataRaw[headerRowIndex].map(String);
+          const dataRows = jsonDataRaw.slice(headerRowIndex + 1);
 
           const formattedJsonData = dataRows.map(rowArray => {
             const rowObject: {[key: string]: any} = {};
-            (rowArray as any[]).forEach((cellValue, index) => {
+            rowArray.forEach((cellValue, index) => {
                 if (headers[index]) {
-                    // If cellValue is a Date object from cellDates: true, format it.
-                    // Otherwise, it might be string or number.
+                    // If cellDates:true parsed it as a Date object
                     if (cellValue instanceof Date) {
-                        // Let our formatDate handle it later with proper hints
-                        rowObject[headers[index]] = cellValue.toISOString().split('T')[0]; // pre-format to YYYY-MM-DD
+                        // Convert to YYYY-MM-DD string using UTC to avoid timezone issues
+                        const year = cellValue.getUTCFullYear();
+                        const month = (cellValue.getUTCMonth() + 1).toString().padStart(2, '0');
+                        const day = cellValue.getUTCDate().toString().padStart(2, '0');
+                        rowObject[headers[index]] = `${year}-${month}-${day}`;
                     } else {
-                        rowObject[headers[index]] = cellValue;
+                        rowObject[headers[index]] = cellValue !== null && cellValue !== undefined ? String(cellValue) : "";
                     }
                 }
             });
@@ -280,35 +301,25 @@ export class YNABFormatter {
       let finalMemo = "";
       const description = transaction.description;
 
-      if (options.importMemos) { // Only use description if importMemos is true
+      if (options.importMemos) {
         if (options.swapPayeesMemos) {
           finalPayee = description;
-          // finalMemo remains empty or could be from another source if we had one
         } else {
           finalMemo = description;
-          // finalPayee remains empty or from another source
         }
       }
-      // If options.importMemos is false, both finalPayee and finalMemo remain based on their initial empty string values,
-      // as description is not used.
 
-      const outflowValue = transaction.amount < 0 ? Math.abs(transaction.amount).toFixed(2) : "";
-      const inflowValue = transaction.amount > 0 ? transaction.amount.toFixed(2) : "";
+      const finalOutflow = transaction.amount < 0 ? Math.abs(transaction.amount).toFixed(2) : "";
+      const finalInflow = transaction.amount > 0 ? transaction.amount.toFixed(2) : "";
       
-      let finalOutflow = "";
-      let finalInflow = "";
-
-      if (transaction.amount < 0) {
-        finalOutflow = Math.abs(transaction.amount).toFixed(2);
-      } else if (transaction.amount > 0) {
-        finalInflow = transaction.amount.toFixed(2);
-      }
-      // For $0 transactions, both will be empty strings, which is usually fine for YNAB.
+      // FIX: Format date based on outputDateFormat option
+      // transaction.date is already in YYYY-MM-DD format from parseFile/formatDate
+      const ynabDate = YNABFormatter.formatDateForOutput(transaction.date, options.outputDateFormat);
 
       return {
-        Date: transaction.date, // Already YYYY-MM-DD, YNAB handles this or converts
+        Date: ynabDate, // Use the date formatted for output
         Payee: finalPayee,
-        Category: "", // Category is always empty
+        Category: "", 
         Memo: finalMemo,
         Outflow: finalOutflow,
         Inflow: finalInflow,
@@ -317,10 +328,9 @@ export class YNABFormatter {
   }
 
   static generateYNABCSVString(ynabTransactions: YNABTransaction[]): string {
-    // YNAB can be picky about date formats. It often accepts YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY.
-    // Our internal format is YYYY-MM-DD, which should be safe.
+    // Data is already prepared with correctly formatted dates by convertToYNABTransactions
     const dataForSheet = ynabTransactions.map(tx => ({
-        Date: tx.Date, // Use the already formatted date
+        Date: tx.Date, 
         Payee: tx.Payee,
         Category: tx.Category,
         Memo: tx.Memo,
@@ -329,16 +339,12 @@ export class YNABFormatter {
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(dataForSheet, {
-      header: ['Date', 'Payee', 'Category', 'Memo', 'Outflow', 'Inflow'], 
-      skipHeader: false, // XLSX.utils.sheet_to_csv will include this header
+      header: YNAB_CSV_HEADER_ARRAY, // Use the defined header order
+      skipHeader: false, // json_to_sheet creates the header row
     });
     
-    // Generate CSV string. XLSX.utils.sheet_to_csv prepends a BOM by default, which is good for Excel.
-    // It also uses the header row from the worksheet.
-    const csvString = XLSX.utils.sheet_to_csv(worksheet, { FS: ','}); // Specify Field Separator
-    
-    // sheet_to_csv actually includes the header if it's part of the sheet.
-    // So we don't need to prepend YNAB_CSV_HEADER if json_to_sheet included it.
+    // Generate CSV string. XLSX.utils.sheet_to_csv prepends a BOM by default.
+    const csvString = XLSX.utils.sheet_to_csv(worksheet, { FS: ','}); 
     return csvString; 
   }
 }

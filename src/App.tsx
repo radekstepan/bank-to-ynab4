@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, ChevronDown, Check, UploadCloud, Download } from 'lucide-react';
-import { YNABFormatter, NormalizedTransaction, bankConfigs } from './utils/ynabFormatter';
+import { YNABFormatter, NormalizedTransaction, bankConfigs, ConvertToYNABOptions } from './utils/ynabFormatter';
 
 // Helper component for a styled button
 const StyledButton: React.FC<{
@@ -38,10 +38,7 @@ export default function App() {
     }));
 
   const [selectedAccount, setSelectedAccount] = useState<string>(initialBankOptions[0]?.value || '');
-  // MODIFIED: Renamed dateFormat to inputDateFormat for clarity (controls parsing)
-  const [inputDateFormat, setInputDateFormat] = useState('Day/Month/Year'); 
-  // NEW: State for output date format (controls display in preview table)
-  const [outputDateFormat, setOutputDateFormat] = useState('Day/Month/Year');
+  const [outputDateFormat, setOutputDateFormat] = useState('Day/Month/Year'); 
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'info' | 'success' | 'error' | 'warning', text: string} | null>(null);
@@ -67,7 +64,6 @@ export default function App() {
   const processAndSetTransactions = async (
     fileToParse: File, 
     accountToUse: string, 
-    // MODIFIED: Parameter name reflects it's for input parsing
     inputFileDateFormatSetting: string, 
     isReparse: boolean = false
   ) => {
@@ -91,7 +87,6 @@ export default function App() {
 
     try {
         let formatHint = '';
-        // MODIFIED: Use inputFileDateFormatSetting to determine hint for parsing
         if (inputFileDateFormatSetting === 'Day/Month/Year') formatHint = 'DD/MM/YYYY';
         else if (inputFileDateFormatSetting === 'Month/Day/Year') formatHint = 'MM/DD/YYYY';
         else if (inputFileDateFormatSetting === 'Year/Month/Day') formatHint = 'YYYY/MM/DD';
@@ -127,8 +122,9 @@ export default function App() {
       if (file.name.endsWith('.csv') || file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
         setSelectedFile(file); 
         setSelectedFileName(file.name);
-        // MODIFIED: Pass inputDateFormat for parsing
-        await processAndSetTransactions(file, selectedAccount, inputDateFormat, false);
+        // Note: outputDateFormat is passed as inputFileDateFormatSetting here. This maintains existing behavior
+        // for input parsing hint, though ideally input and output formats are fully decoupled.
+        await processAndSetTransactions(file, selectedAccount, outputDateFormat, false);
       } else {
         setSelectedFile(null);
         setSelectedFileName('');
@@ -149,7 +145,7 @@ export default function App() {
 
     console.log('Importing transactions with settings:', {
       selectedAccount,
-      inputDateFormat, // Log the input date format used for parsing
+      outputDateFormat, 
       transactionsCount: parsedTransactions.length,
       fieldMapping: "Description to Memo, Payee blank"
     });
@@ -157,11 +153,14 @@ export default function App() {
     const transactionsToImport = parsedTransactions;
 
     try {
-      const ynabTransactions = YNABFormatter.convertToYNABTransactions(transactionsToImport, {
+      const ynabConvertOptions: ConvertToYNABOptions = {
         importMemos: true,      
-        swapPayeesMemos: false  
-      });
+        swapPayeesMemos: false,
+        outputDateFormat: outputDateFormat // Pass the selected output date format
+      };
+      const ynabTransactions = YNABFormatter.convertToYNABTransactions(transactionsToImport, ynabConvertOptions);
       const ynabCsvString = YNABFormatter.generateYNABCSVString(ynabTransactions);
+
 
       const blob = new Blob([ynabCsvString], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
@@ -211,26 +210,14 @@ export default function App() {
             return isoDate; // Invalid date components
         }
         
-        // This check is somewhat redundant due to the one above, but good for safety.
         if (isNaN(d.getTime())) return isoDate;
 
         const displayDay = String(d.getUTCDate()).padStart(2, '0');
         const displayMonth = String(d.getUTCMonth() + 1).padStart(2, '0'); // Back to 1-indexed for display
         const displayYear = String(d.getUTCFullYear()); 
 
-        // MODIFIED: Use outputDateFormat to determine display string
-        switch (outputDateFormat) { 
-            case 'Day/Month/Year':
-                return `${displayDay}/${displayMonth}/${displayYear}`;
-            case 'Month/Day/Year':
-                return `${displayMonth}/${displayDay}/${displayYear}`;
-            case 'Year/Month/Day':
-                return `${displayYear}/${displayMonth}/${displayDay}`;
-            case 'YYYY-MM-DD': // NEW: Added option for YYYY-MM-DD display
-                return `${displayYear}-${displayMonth}-${displayDay}`;
-            default:
-                return `${displayYear}-${displayMonth}-${displayDay}`; // Fallback to YYYY-MM-DD
-        }
+        // Use Day/Month/Year format by default for preview display
+        return `${displayDay}/${displayMonth}/${displayYear}`;
     } catch (e) {
         console.error("Error formatting date for display:", e, "Input was:", isoDate);
         return isoDate; 
@@ -288,7 +275,7 @@ export default function App() {
 
             {parsedTransactions.length > 0 && !isProcessing && (
               <>
-                {/* Settings Area: Bank Account, Input Date Format, Output Date Format */}
+                {/* Settings Area: Bank Account, Output Date Format */}
                 <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 items-start">
                   <div>
                     <label htmlFor="bankAccount" className="block text-sm font-medium text-slate-700 mb-1">Importing from Account:</label>
@@ -296,13 +283,12 @@ export default function App() {
                         <select
                             id="bankAccount"
                             value={selectedAccount}
-                            // MODIFIED: onChange for bankAccount to reprocess if file is selected
                             onChange={async (e) => {
                                 const newAccount = e.target.value;
-                                setSelectedAccount(newAccount); // Update state first
+                                setSelectedAccount(newAccount); 
                                 if (selectedFile) {
-                                    // Automatically re-process with the new account and current inputDateFormat
-                                    await processAndSetTransactions(selectedFile, newAccount, inputDateFormat, true);
+                                    // Note: outputDateFormat is passed as inputFileDateFormatSetting here.
+                                    await processAndSetTransactions(selectedFile, newAccount, outputDateFormat, true);
                                 } else {
                                      if (statusMessage && statusMessage.text.includes("Please select a valid bank account type first.")) {
                                         if (newAccount || availableBankOptions.length === 0) { 
@@ -326,31 +312,29 @@ export default function App() {
                     </div>
                   </div>
                   
-                  {/* MODIFIED: This is now the Input Date Format Selector */}
                   <div>
-                    <label htmlFor="inputDateFormatSelect" className="block text-sm font-medium text-slate-700 mb-1">Input File Date Format:</label>
+                    <label htmlFor="outputDateFormatSelect" className="block text-sm font-medium text-slate-700 mb-1">Output File Date Format:</label>
                     <div className="relative">
                       <select
-                        id="inputDateFormatSelect"
-                        value={inputDateFormat} 
-                        onChange={async (e) => { 
-                            const newSourceDateFormat = e.target.value;
-                            setInputDateFormat(newSourceDateFormat); 
-                            if (selectedFile) {
-                                // Re-process with new input date format setting
-                                await processAndSetTransactions(selectedFile, selectedAccount, newSourceDateFormat, true);
-                            }
+                        id="outputDateFormatSelect"
+                        value={outputDateFormat} 
+                        onChange={(e) => { 
+                            const newOutputDateFormat = e.target.value;
+                            setOutputDateFormat(newOutputDateFormat); 
+                            // FIX: Removed re-parsing call to prevent UI reload on output format change.
+                            // The change to outputDateFormat will be picked up during the CSV generation (handleImport).
                         }}
                         disabled={isProcessing}
                         className="w-full p-2.5 text-slate-700 bg-white border border-slate-400 rounded-md shadow-sm outline-none appearance-none focus:border-blue-500"
                       >
-                        <option>Day/Month/Year</option>
-                        <option>Month/Day/Year</option>
-                        <option>Year/Month/Day</option>
+                        <option value="Day/Month/Year">Day/Month/Year (DD/MM/YYYY)</option>
+                        <option value="Month/Day/Year">Month/Day/Year (MM/DD/YYYY)</option>
+                        <option value="Year/Month/Day">Year/Month/Day (YYYY/MM/DD)</option>
                       </select>
                       <ChevronDown className="w-5 h-5 text-slate-500 absolute top-1/2 right-3 -translate-y-1/2 pointer-events-none" />
                     </div>
                   </div>
+
                 </div>
 
 
@@ -411,7 +395,6 @@ export default function App() {
                 </div>
               </>
             )}
-            {/* MODIFIED: Simplified placeholder message logic */}
             {parsedTransactions.length === 0 && !selectedFile && !isProcessing && (
                  <div className="mt-6 p-4 text-center text-slate-500">
                     <p>Please select a bank statement file to begin.</p>
