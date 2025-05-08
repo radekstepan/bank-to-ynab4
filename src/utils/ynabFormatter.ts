@@ -6,6 +6,7 @@ export interface NormalizedTransaction {
   date: string; // Should be in YYYY-MM-DD format after parsing
   description: string;
   amount: number; // Positive for inflow, negative for outflow
+  // checkNum?: string; // Optional: if bank data includes it
 }
 
 // YNAB's expected transaction structure for CSV import
@@ -19,149 +20,188 @@ export interface YNABTransaction {
 }
 
 // Configuration for parsing different bank formats
-interface BankParseConfig {
+export interface BankParseConfig {
+  label: string; // User-friendly label for dropdown
   dateField: string;
   descriptionField: string;
-  outflowField?: string; // Use if separate debit/credit columns
-  inflowField?: string;  // Use if separate debit/credit columns
-  amountField?: string;  // Use if single amount column (positive/negative)
-  skipRows?: number;     // For CSVs with extra header lines
+  outflowField?: string; 
+  inflowField?: string;  
+  amountField?: string;  
+  skipRows?: number;     
   dateFormat?: string;   // e.g., 'YYYY-MM-DD', 'MM/DD/YYYY', 'DD MMM YYYY' for parsing assistance
-  // Function to transform amount if needed (e.g. from string "1,234.56 CR")
   transformAmount?: (outflow?: string, inflow?: string, amount?: string) => number;
 }
 
 // --- Define bank-specific configurations ---
-const bankConfigs: Record<string, BankParseConfig> = {
+// Add a 'label' field for UI display
+export const bankConfigs: Record<string, BankParseConfig> = {
   eqbank: {
-    dateField: 'Transfer date', // Matches CSV header
-    descriptionField: 'Description', // Matches CSV header
-    amountField: 'Amount',       // Uses the single 'Amount' column
-    skipRows: 0, // First row is header
-    dateFormat: 'DD MMM YYYY', // Input format hint (e.g., 07 MAY 2025)
+    label: 'EQ Bank (CSV/XLSX)',
+    dateField: 'Transfer date', 
+    descriptionField: 'Description', 
+    amountField: 'Amount',       
+    skipRows: 0, 
+    dateFormat: 'DD MMM YYYY', 
     transformAmount: (_outflow?: string, _inflow?: string, amount?: string) => {
       if (typeof amount === 'string') {
-        // Remove '$' and ',' then parse.
-        // Handles "-$180" or "$78.79"
         const cleanedAmount = amount.replace(/\$/g, '').replace(/,/g, '');
         const num = parseFloat(cleanedAmount);
-        return isNaN(num) ? 0 : num; // Return 0 if parsing fails, preserves sign
+        return isNaN(num) ? 0 : num; 
       }
-      return 0; // If amount is not a string or undefined
+      return 0;
     }
   },
-  // Example for a bank with a single 'Amount' column:
-  // 'genericBankWithAmount': {
-  //   dateField: 'Date',
-  //   descriptionField: 'Transaction Description',
-  //   amountField: 'Amount',
-  //   skipRows: 0,
-  //   dateFormat: 'MM/DD/YYYY',
-  //   transformAmount: (_o, _i, amount?: string) => {
-  //     return amount ? parseFloat(amount.replace(/[^0-9.-]/g, '')) : 0;
-  //   }
-  // }
+  generic_dmy: {
+    label: 'Generic CSV/XLSX (Date, Desc, Amount - DD/MM/YYYY)',
+    dateField: 'Date',
+    descriptionField: 'Description',
+    amountField: 'Amount',
+    skipRows: 0,
+    dateFormat: 'DD/MM/YYYY',
+     transformAmount: (_o, _i, amount?: string) => {
+       return amount ? parseFloat(String(amount).replace(/[^0-9.-]/g, '')) : 0;
+     }
+  },
+  generic_mdy: {
+    label: 'Generic CSV/XLSX (Date, Desc, Amount - MM/DD/YYYY)',
+    dateField: 'Date',
+    descriptionField: 'Description',
+    amountField: 'Amount',
+    skipRows: 0,
+    dateFormat: 'MM/DD/YYYY',
+    transformAmount: (_o, _i, amount?: string) => {
+       return amount ? parseFloat(String(amount).replace(/[^0-9.-]/g, '')) : 0;
+     }
+  }
 };
 
 // YNAB CSV Header
 export const YNAB_CSV_HEADER = "Date,Payee,Category,Memo,Outflow,Inflow";
 
+export interface ConvertToYNABOptions {
+  importMemos: boolean;
+  swapPayeesMemos: boolean;
+}
+
 export class YNABFormatter {
-  private static formatDate(dateString: string, inputFormat?: string): string {
+  private static formatDate(dateString: string, inputFormatHint?: string): string {
     let dateObj: Date;
 
-    // Standardize common date variations that new Date() might misinterpret
-    // For 'DD MMM YYYY' (e.g., '07 MAY 2025'), new Date() usually handles it correctly.
-    if (inputFormat === 'DD/MM/YYYY' && /^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) {
-        const parts = dateString.split('/');
-        dateObj = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
-    } else if (inputFormat === 'MM/DD/YYYY' && /^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) {
-        const parts = dateString.split('/');
-        dateObj = new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+    // Prioritize specific format hints if provided and they match the pattern
+    if (inputFormatHint === 'DD/MM/YYYY' && /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(dateString)) {
+        const parts = dateString.split(/[\/\-.]/);
+        dateObj = new Date(parseInt(parts[2].length === 2 ? '20' + parts[2] : parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));
+    } else if (inputFormatHint === 'MM/DD/YYYY' && /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(dateString)) {
+        const parts = dateString.split(/[\/\-.]/);
+        dateObj = new Date(parseInt(parts[2].length === 2 ? '20' + parts[2] : parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+    } else if (inputFormatHint === 'YYYY/MM/DD' && /^\d{4}[\/\-.]\d{1,2}[\/\-.]\d{1,2}$/.test(dateString)) {
+        const parts = dateString.split(/[\/\-.]/);
+        dateObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
     } else {
-       // For formats like 'DD MMM YYYY' or 'YYYY-MM-DD'
+       // Fallback to direct parsing for other formats like 'DD MMM YYYY' or ISO
        dateObj = new Date(dateString);
+       // If direct parsing failed and it looks like a common Excel date number
+       if (isNaN(dateObj.getTime()) && /^\d{5}$/.test(dateString)) { // Check if it's an Excel serial date number
+         const excelSerialDate = parseInt(dateString, 10);
+         // Excel serial date is days since 1899-12-30 (for Windows Excel)
+         const baseDate = new Date(1899, 11, 30); // December 30, 1899
+         dateObj = new Date(baseDate.getTime() + excelSerialDate * 24 * 60 * 60 * 1000);
+       }
     }
 
     if (isNaN(dateObj.getTime())) {
-      console.warn(`Could not parse date: ${dateString} with inputFormat: ${inputFormat}. Falling back to original.`);
-      return dateString; // Return original if parsing fails to avoid breaking YNAB import
+      console.warn(`Could not parse date: "${dateString}" with inputFormatHint: "${inputFormatHint}". Falling back to original string.`);
+      return dateString; 
     }
-    // Format to YYYY-MM-DD which is a safe bet for YNAB
+    
     const year = dateObj.getFullYear();
     const month = (dateObj.getMonth() + 1).toString().padStart(2, '0');
     const day = dateObj.getDate().toString().padStart(2, '0');
-    return `${year}-${month}-${day}`;
+    return `${year}-${month}-${day}`; // Standardize to YYYY-MM-DD for internal use
   }
 
 
-  static async parseFile(file: File, bankType: string): Promise<NormalizedTransaction[]> {
+  static async parseFile(file: File, bankType: string, uiDateFormatHint?: string): Promise<NormalizedTransaction[]> {
     const config = bankConfigs[bankType];
     if (!config) {
       throw new Error(`Unsupported bank type: ${bankType}. No configuration found.`);
     }
 
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
-
     let rawData: any[];
 
+    // Use UI hint if provided, otherwise fallback to bank config's date format
+    const effectiveDateFormat = uiDateFormatHint || config.dateFormat;
+
     if (fileExtension === 'csv') {
-      rawData = await this.parseCSV(file, config.skipRows);
+      rawData = await this.parseCSV(file); // CSV parsing usually gets headers right
     } else if (fileExtension === 'xlsx' || fileExtension === 'xls') {
       rawData = await this.parseXLSX(file, config.skipRows);
     } else {
       throw new Error('Unsupported file type. Please upload CSV, XLS, or XLSX.');
     }
+    
+    // Data might have an effective skipRows applied if headers are not on the first line for XLSX
+    // For CSV, PapaParse's `header: true` handles the first line as header.
+    // If config.skipRows is > 0 for CSV, it implies more lines to skip *after* the header.
+    // This logic might need refinement if CSVs have multiple pre-header rows.
+    // For now, assuming PapaParse handles CSV header row, and config.skipRows applies to XLSX content rows.
 
-    return rawData.map((row: any, index: number) => {
+    const transactions = rawData.slice(fileExtension === 'csv' ? (config.skipRows || 0) : 0).map((row: any, index: number) => {
       const dateValue = row[config.dateField];
       const descriptionValue = row[config.descriptionField];
-
-      let amount: number = 0; // Default to 0
+      
+      let amount: number = 0;
       if (config.transformAmount) {
-        // Pass the relevant field(s) to transformAmount based on config
-        const amountArg = config.amountField ? row[config.amountField] : undefined;
-        const outflowArg = config.outflowField ? row[config.outflowField] : undefined;
-        const inflowArg = config.inflowField ? row[config.inflowField] : undefined;
+        const amountArg = config.amountField ? String(row[config.amountField]) : undefined;
+        const outflowArg = config.outflowField ? String(row[config.outflowField]) : undefined;
+        const inflowArg = config.inflowField ? String(row[config.inflowField]) : undefined;
         amount = config.transformAmount(outflowArg, inflowArg, amountArg);
-      } else if (config.amountField) { // Fallback if no transformAmount but amountField exists
+      } else if (config.amountField) {
         const rawAmount = row[config.amountField];
         const cleanedAmount = typeof rawAmount === 'string' ? rawAmount.replace(/[^0-9.-]/g, '') : String(rawAmount);
-        const num = parseFloat(cleanedAmount);
-        amount = isNaN(num) ? 0 : num;
-      } else if (config.outflowField && config.inflowField) { // Fallback for separate outflow/inflow
+        amount = parseFloat(cleanedAmount) || 0;
+      } else if (config.outflowField && config.inflowField) {
         const outflow = row[config.outflowField];
         const inflow = row[config.inflowField];
-        const outflowNum = typeof outflow === 'string' ? parseFloat(outflow.replace(/[^0-9.-]/g, '')) : Number(outflow) || 0;
-        const inflowNum = typeof inflow === 'string' ? parseFloat(inflow.replace(/[^0-9.-]/g, '')) : Number(inflow) || 0;
+        const outflowNum = parseFloat(String(outflow).replace(/[^0-9.-]/g, '')) || 0;
+        const inflowNum = parseFloat(String(inflow).replace(/[^0-9.-]/g, '')) || 0;
         amount = inflowNum - outflowNum;
       }
 
-      // Ensure dateValue and descriptionValue are present. Amount can be 0.
       if (dateValue === undefined || dateValue === null || String(dateValue).trim() === '' ||
           descriptionValue === undefined || descriptionValue === null || String(descriptionValue).trim() === '') {
-        console.warn(`Skipping row ${index + (config.skipRows || 0) + 2} due to missing date or description:`, row); // +2 because row index is 0-based and we skip 1 header row
+        console.warn(`Skipping row ${index + (config.skipRows || 0) + 1} due to missing date or description:`, row);
         return null;
       }
       
       return {
-        date: this.formatDate(String(dateValue), config.dateFormat),
+        date: this.formatDate(String(dateValue), effectiveDateFormat),
         description: String(descriptionValue).trim(),
         amount: amount,
       };
-    }).filter(Boolean) as NormalizedTransaction[]; // Filter out nulls
+    }).filter(Boolean) as NormalizedTransaction[];
+    
+    if (transactions.length === 0 && rawData.length > 0) {
+        console.warn("File parsed but no valid transactions extracted. Check field names in bank config and file structure.");
+        console.log("Raw data sample (first few rows):", rawData.slice(0,5));
+        console.log("Expected field names from config:", {date: config.dateField, desc: config.descriptionField, amt: config.amountField});
+    }
+    return transactions;
   }
 
-  private static parseCSV(file: File, skipRows: number = 0): Promise<any[]> {
+  private static parseCSV(file: File): Promise<any[]> {
     return new Promise((resolve, reject) => {
       Papa.parse(file, {
         header: true, 
         skipEmptyLines: true,
+        dynamicTyping: false, // Keep all as strings initially to avoid type issues before specific parsing
         complete: (results) => {
           if (results.errors.length) {
             console.error("CSV Parsing errors:", results.errors.map(e => `Row ${e.row}: ${e.message} (${e.code})`).join('\n'));
+            // Depending on severity, might still resolve results.data or reject
           }
-          resolve(results.data); 
+          resolve(results.data as any[]); 
         },
         error: (error: Error) => {
           reject(error);
@@ -176,16 +216,52 @@ export class YNABFormatter {
       reader.onload = (event) => {
         try {
           const data = new Uint8Array(event.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: 'array', cellDates: true });
+          const workbook = XLSX.read(data, { type: 'array', cellDates: true, dateNF:'yyyy-mm-dd'}); // Attempt to get dates as JS Dates
           const sheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[sheetName];
           
-          let jsonData = XLSX.utils.sheet_to_json(worksheet, {});
+          // For XLSX, if skipRows is provided, we adjust the range or process the JSON later.
+          // sheet_to_json respects `range` option if header is not 0.
+          // Simpler to slice after conversion if header is always row 0 effectively for sheet_to_json.
+          const jsonData = XLSX.utils.sheet_to_json(worksheet, {
+            raw: false, // format values (e.g. dates)
+            header: 1, // Get array of arrays first to handle headers manually if needed
+            // defval: "" // default value for empty cells
+          });
 
-          if (skipRows > 0) { 
-            jsonData = jsonData.slice(skipRows);
+          if (!jsonData || jsonData.length === 0) {
+            resolve([]);
+            return;
           }
-          resolve(jsonData);
+
+          // Effective header row after skipping initial non-data rows
+          const headerRowIndex = skipRows; 
+          if (headerRowIndex >= jsonData.length) {
+             console.error("skipRows is too large, no data or header row found.");
+             resolve([]);
+             return;
+          }
+          const headers: string[] = (jsonData[headerRowIndex] as any[]).map(String);
+          const dataRows = jsonData.slice(headerRowIndex + 1);
+
+          const formattedJsonData = dataRows.map(rowArray => {
+            const rowObject: {[key: string]: any} = {};
+            (rowArray as any[]).forEach((cellValue, index) => {
+                if (headers[index]) {
+                    // If cellValue is a Date object from cellDates: true, format it.
+                    // Otherwise, it might be string or number.
+                    if (cellValue instanceof Date) {
+                        // Let our formatDate handle it later with proper hints
+                        rowObject[headers[index]] = cellValue.toISOString().split('T')[0]; // pre-format to YYYY-MM-DD
+                    } else {
+                        rowObject[headers[index]] = cellValue;
+                    }
+                }
+            });
+            return rowObject;
+          });
+          resolve(formattedJsonData);
+
         } catch (e) {
           reject(e);
         }
@@ -195,16 +271,30 @@ export class YNABFormatter {
     });
   }
 
-  static convertToYNABTransactions(transactions: NormalizedTransaction[]): YNABTransaction[] {
+  static convertToYNABTransactions(
+    transactions: NormalizedTransaction[],
+    options: ConvertToYNABOptions
+  ): YNABTransaction[] {
     return transactions.map((transaction) => {
-      // Amount formatting (positive for YNAB's Inflow/Outflow)
+      let finalPayee = "";
+      let finalMemo = "";
+      const description = transaction.description;
+
+      if (options.importMemos) { // Only use description if importMemos is true
+        if (options.swapPayeesMemos) {
+          finalPayee = description;
+          // finalMemo remains empty or could be from another source if we had one
+        } else {
+          finalMemo = description;
+          // finalPayee remains empty or from another source
+        }
+      }
+      // If options.importMemos is false, both finalPayee and finalMemo remain based on their initial empty string values,
+      // as description is not used.
+
       const outflowValue = transaction.amount < 0 ? Math.abs(transaction.amount).toFixed(2) : "";
       const inflowValue = transaction.amount > 0 ? transaction.amount.toFixed(2) : "";
-
-      // Ensure one of outflow/inflow is "0.00" if amount is 0, otherwise empty string
-      // YNAB typically prefers an empty string if there's no inflow/outflow, rather than "0.00" unless both are 0.
-      // If YNAB requires "0.00" for zero amounts, this logic can be adjusted.
-      // For now, sticking to "" for non-applicable flow and actual value for applicable flow.
+      
       let finalOutflow = "";
       let finalInflow = "";
 
@@ -212,18 +302,14 @@ export class YNABFormatter {
         finalOutflow = Math.abs(transaction.amount).toFixed(2);
       } else if (transaction.amount > 0) {
         finalInflow = transaction.amount.toFixed(2);
-      } else { // transaction.amount is 0
-        // YNAB often just needs one value, or both can be empty if truly zero.
-        // If you must have a 0.00, pick one:
-        // finalOutflow = "0.00"; 
-        // Or leave both blank which is also usually fine for YNAB for $0 transactions
       }
+      // For $0 transactions, both will be empty strings, which is usually fine for YNAB.
 
       return {
-        Date: transaction.date,        // Original date
-        Payee: "",                     // MODIFIED: Payee is now blank
-        Category: "",                  // MODIFIED: Category is now blank
-        Memo: transaction.description, // MODIFIED: Original description goes into Memo
+        Date: transaction.date, // Already YYYY-MM-DD, YNAB handles this or converts
+        Payee: finalPayee,
+        Category: "", // Category is always empty
+        Memo: finalMemo,
         Outflow: finalOutflow,
         Inflow: finalInflow,
       };
@@ -231,11 +317,28 @@ export class YNABFormatter {
   }
 
   static generateYNABCSVString(ynabTransactions: YNABTransaction[]): string {
-    const worksheet = XLSX.utils.json_to_sheet(ynabTransactions, {
+    // YNAB can be picky about date formats. It often accepts YYYY-MM-DD, MM/DD/YYYY, DD/MM/YYYY.
+    // Our internal format is YYYY-MM-DD, which should be safe.
+    const dataForSheet = ynabTransactions.map(tx => ({
+        Date: tx.Date, // Use the already formatted date
+        Payee: tx.Payee,
+        Category: tx.Category,
+        Memo: tx.Memo,
+        Outflow: tx.Outflow,
+        Inflow: tx.Inflow
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(dataForSheet, {
       header: ['Date', 'Payee', 'Category', 'Memo', 'Outflow', 'Inflow'], 
-      skipHeader: true, // We prepend our own header string
+      skipHeader: false, // XLSX.utils.sheet_to_csv will include this header
     });
-    const csvString = XLSX.utils.sheet_to_csv(worksheet);
-    return `${YNAB_CSV_HEADER}\n${csvString}`;
+    
+    // Generate CSV string. XLSX.utils.sheet_to_csv prepends a BOM by default, which is good for Excel.
+    // It also uses the header row from the worksheet.
+    const csvString = XLSX.utils.sheet_to_csv(worksheet, { FS: ','}); // Specify Field Separator
+    
+    // sheet_to_csv actually includes the header if it's part of the sheet.
+    // So we don't need to prepend YNAB_CSV_HEADER if json_to_sheet included it.
+    return csvString; 
   }
 }
