@@ -1,87 +1,10 @@
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
-
-// Intermediate normalized transaction structure
-export interface NormalizedTransaction {
-  date: string; // Should be in YYYY-MM-DD format after parsing
-  description: string;
-  amount: number; // Positive for inflow, negative for outflow
-  // checkNum?: string; // Optional: if bank data includes it
-}
-
-// YNAB's expected transaction structure for CSV import
-export interface YNABTransaction {
-  Date: string;      // Format depends on outputDateFormat option (e.g., DD/MM/YYYY)
-  Payee: string;
-  Category: string;  // Optional, can be empty
-  Memo: string;      // Optional, can be empty
-  Outflow: string;   // Positive number string, e.g., "123.45"
-  Inflow: string;    // Positive number string, e.g., "678.90"
-}
-
-// Configuration for parsing different bank formats
-export interface BankParseConfig {
-  label: string; // User-friendly label for dropdown
-  dateField: string;
-  descriptionField: string;
-  outflowField?: string; 
-  inflowField?: string;  
-  amountField?: string;  
-  skipRows?: number;     
-  dateFormat?: string;   // e.g., 'YYYY-MM-DD', 'MM/DD/YYYY', 'DD MMM YYYY' for parsing assistance
-  transformAmount?: (outflow?: string, inflow?: string, amount?: string) => number;
-}
-
-// --- Define bank-specific configurations ---
-export const bankConfigs: Record<string, BankParseConfig> = {
-  eqbank: {
-    label: 'EQ Bank (CSV/XLSX)',
-    dateField: 'Transfer date', 
-    descriptionField: 'Description', 
-    amountField: 'Amount',       
-    skipRows: 0, 
-    dateFormat: 'DD MMM YYYY', 
-    transformAmount: (_outflow?: string, _inflow?: string, amount?: string) => {
-      if (typeof amount === 'string') {
-        const cleanedAmount = amount.replace(/\$/g, '').replace(/,/g, '');
-        const num = parseFloat(cleanedAmount);
-        return isNaN(num) ? 0 : num; 
-      }
-      return 0;
-    }
-  },
-  generic_dmy: {
-    label: 'Generic CSV/XLSX (Date, Desc, Amount - DD/MM/YYYY)',
-    dateField: 'Date',
-    descriptionField: 'Description',
-    amountField: 'Amount',
-    skipRows: 0,
-    dateFormat: 'DD/MM/YYYY',
-     transformAmount: (_o, _i, amount?: string) => {
-       return amount ? parseFloat(String(amount).replace(/[^0-9.-]/g, '')) : 0;
-     }
-  },
-  generic_mdy: {
-    label: 'Generic CSV/XLSX (Date, Desc, Amount - MM/DD/YYYY)',
-    dateField: 'Date',
-    descriptionField: 'Description',
-    amountField: 'Amount',
-    skipRows: 0,
-    dateFormat: 'MM/DD/YYYY',
-    transformAmount: (_o, _i, amount?: string) => {
-       return amount ? parseFloat(String(amount).replace(/[^0-9.-]/g, '')) : 0;
-     }
-  }
-};
+import { NormalizedTransaction, YNABTransaction, ConvertToYNABOptions } from '../types/transactions';
+import { bankConfigs } from '../config/bankConfigs';
 
 // YNAB CSV Header (used by XLSX.utils.json_to_sheet's header option)
 export const YNAB_CSV_HEADER_ARRAY = ['Date', 'Payee', 'Category', 'Memo', 'Outflow', 'Inflow'];
-
-export interface ConvertToYNABOptions {
-  importMemos: boolean;
-  swapPayeesMemos: boolean;
-  outputDateFormat?: string; // e.g., "Day/Month/Year", "Month/Day/Year", "Year/Month/Day"
-}
 
 export class YNABFormatter {
   // Parses input date string based on hint and standardizes to YYYY-MM-DD

@@ -42,7 +42,7 @@ A modern web application that converts bank statement files (CSV, XLS, XLSX) to 
    npm start
    ```
 
-4. Open your browser and navigate to `http://localhost:8080`
+4. Open your browser and navigate to `http://localhost:3000` (or the port specified in your Webpack config if different)
 
 ## 🛠️ Building for Production
 
@@ -61,7 +61,7 @@ The built files will be in the `dist` directory, ready to be deployed to any sta
 
 2. **Configure Import Settings** ⚙️
    - Choose your bank type from the dropdown menu
-   - Select the date format used in your statement file
+   - Select the desired output date format for the YNAB4 CSV file
 
 3. **Preview Transactions** 👀
    - Review the transactions that will be imported
@@ -85,9 +85,12 @@ Currently supported bank formats:
 
 ## 🧩 Adding New Bank Formats
 
-To add support for additional banks, edit the `bankConfigs` object in `src/utils/ynabFormatter.ts`:
+To add support for additional banks, edit the `bankConfigs` object in `src/config/bankConfigs.ts`:
 
 ```typescript
+// src/config/bankConfigs.ts
+import { BankParseConfig } from '../types/transactions';
+
 export const bankConfigs: Record<string, BankParseConfig> = {
   // Existing configurations...
   
@@ -97,7 +100,7 @@ export const bankConfigs: Record<string, BankParseConfig> = {
     descriptionField: 'Description Field Name in Statement',
     amountField: 'Amount Field Name in Statement',
     skipRows: 0, // Number of rows to skip before header
-    dateFormat: 'DD/MM/YYYY', // Format used in your bank's statements
+    dateFormat: 'DD/MM/YYYY', // Format used in your bank's statements for parsing
     transformAmount: (_outflow?: string, _inflow?: string, amount?: string) => {
       // Custom logic to parse amount if needed
       return amount ? parseFloat(String(amount).replace(/[^0-9.-]/g, '')) : 0;
@@ -105,6 +108,7 @@ export const bankConfigs: Record<string, BankParseConfig> = {
   }
 };
 ```
+You may also need to import `BankParseConfig` from `../types/transactions` if it's not already imported in that file.
 
 ## 📝 Notes on YNAB4 Import Format
 
