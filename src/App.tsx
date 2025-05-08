@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, ChevronDown, Check, UploadCloud, Download } from 'lucide-react';
-import { YNABFormatter } from './utils/ynabFormatter';
+import { YNABFormatter } from './utils/ynabFormatter'; // Ensure YNABFormatter is imported
 import { NormalizedTransaction, ConvertToYNABOptions } from './types/transactions';
 import { bankConfigs } from './config/bankConfigs';
 import StyledButton from './components/StyledButton';
@@ -24,11 +24,10 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'info' | 'success' | 'error' | 'warning', text: string} | null>(null);
 
-  // Add state for swapPayeesMemos to inform the preview
   const [swapPayeesMemos, setSwapPayeesMemos] = useState(false);
 
 
-  const totalTransactions = parsedTransactions.length;
+  // const totalTransactions = parsedTransactions.length; // Not currently used
 
   const availableBankOptions = Object.keys(bankConfigs)
     .filter(key => !key.startsWith('generic_')) 
@@ -43,13 +42,13 @@ export default function App() {
     } else if (availableBankOptions.length === 0 && selectedAccount !== '') {
       setSelectedAccount(''); 
     }
-  }, [availableBankOptions, selectedAccount]);
+  }, [availableBankOptions, selectedAccount]); // availableBankOptions is stable unless bankConfigs changes (which it doesn't at runtime)
 
 
   const processAndSetTransactions = async (
     fileToParse: File, 
     accountToUse: string, 
-    inputFileDateFormatSetting: string, // This is used as a hint for date parsing
+    uiDateHint: string, 
     isReparse: boolean = false
   ) => {
     if (!accountToUse && availableBankOptions.length > 0) {
@@ -71,9 +70,7 @@ export default function App() {
     setParsedTransactions([]); 
 
     try {
-        // The inputFileDateFormatSetting is passed to parseFile as a hint.
-        // The actual bankConfig.dateFormat is also considered within parseFile.
-        const transactions = await YNABFormatter.parseFile(fileToParse, accountToUse, inputFileDateFormatSetting);
+        const transactions = await YNABFormatter.parseFile(fileToParse, accountToUse, uiDateHint);
 
         if (transactions.length === 0) {
             setParsedTransactions([]);
@@ -104,7 +101,6 @@ export default function App() {
       if (file.name.endsWith('.csv') || file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
         setSelectedFile(file); 
         setSelectedFileName(file.name);
-        // Use selectedAccount and outputDateFormat (as date parsing hint) for initial processing
         await processAndSetTransactions(file, selectedAccount, outputDateFormat, false);
       } else {
         setSelectedFile(null);
@@ -124,20 +120,13 @@ export default function App() {
     setIsProcessing(true);
     setStatusMessage({ type: 'info', text: 'Preparing YNAB4 CSV file...' });
 
-    console.log('Importing transactions with settings:', {
-      selectedAccount,
-      outputDateFormat, 
-      swapPayeesMemos, 
-      transactionsCount: parsedTransactions.length,
-    });
-
     const transactionsToImport = parsedTransactions;
 
     try {
       const ynabConvertOptions: ConvertToYNABOptions = {
         importMemos: true, 
         swapPayeesMemos: swapPayeesMemos,
-        outputDateFormat: outputDateFormat // This is for formatting the date in the final CSV
+        outputDateFormat: outputDateFormat
       };
       const ynabTransactions = YNABFormatter.convertToYNABTransactions(transactionsToImport, ynabConvertOptions);
       const ynabCsvString = YNABFormatter.generateYNABCSVString(ynabTransactions);
@@ -163,7 +152,6 @@ export default function App() {
   };
 
   const handleCancel = () => {
-    console.log('Import cancelled');
     setSelectedFile(null);
     setSelectedFileName('');
     setParsedTransactions([]);
@@ -172,29 +160,7 @@ export default function App() {
     setSwapPayeesMemos(false); 
   };
 
-  const formatDateForDisplay = (isoDate: string): string => {
-    try {
-        const parts = isoDate.split('-');
-        if (parts.length !== 3) return isoDate; 
-        const year = parseInt(parts[0], 10);
-        const month = parseInt(parts[1], 10); 
-        const day = parseInt(parts[2], 10);
-        if (isNaN(year) || isNaN(month) || isNaN(day)) return isoDate;
-        const d = new Date(Date.UTC(year, month - 1, day)); 
-        if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month - 1 || d.getUTCDate() !== day) {
-            return isoDate; 
-        }
-        if (isNaN(d.getTime())) return isoDate;
-        const displayDay = String(d.getUTCDate()).padStart(2, '0');
-        const displayMonth = String(d.getUTCMonth() + 1).padStart(2, '0'); 
-        const displayYear = String(d.getUTCFullYear()); 
-        return `${displayDay}/${displayMonth}/${displayYear}`;
-    } catch (e) {
-        console.error("Error formatting date for display:", e, "Input was:", isoDate);
-        return isoDate; 
-    }
-  };
-
+  // Removed formatDateForDisplay, will use YNABFormatter.formatDateForOutput directly in JSX
 
   return (
     <div className="min-h-screen bg-slate-800 py-6 flex flex-col justify-center sm:py-12 font-sans">
@@ -257,7 +223,6 @@ export default function App() {
                                 const newAccount = e.target.value;
                                 setSelectedAccount(newAccount); 
                                 if (selectedFile) {
-                                    // Re-process with the new bank and current date format hint
                                     await processAndSetTransactions(selectedFile, newAccount, outputDateFormat, true);
                                 } else {
                                      if (statusMessage && statusMessage.text.includes("Please select a valid bank account type first.")) {
@@ -286,13 +251,12 @@ export default function App() {
                     <label htmlFor="outputDateFormatSelect" className="block text-sm font-medium text-slate-700 mb-1">Date Format (for parsing & output):</label>
                     <div className="relative">
                       <select
-                        id="outputDateFormatSelect" // ID suggests output, but it's also used as a parsing hint
+                        id="outputDateFormatSelect"
                         value={outputDateFormat} 
                         onChange={(e) => { 
                             const newDateFormat = e.target.value;
                             setOutputDateFormat(newDateFormat); 
                             if (selectedFile && selectedAccount) {
-                                // Re-process if user changes date format, as it's used as a parsing hint
                                 processAndSetTransactions(selectedFile, selectedAccount, newDateFormat, true);
                             }
                         }}
@@ -331,7 +295,7 @@ export default function App() {
                   <div className="mt-6">
                     <h2 className="text-xl font-semibold text-slate-700 mb-1">Import Preview</h2>
                     <p className="text-xs text-slate-600 mb-2">
-                      Preview based on selected options.
+                      Preview based on selected options. Date format matches output selection.
                     </p>
                     <div className="border border-slate-400 rounded-md overflow-hidden">
                       <div className="max-h-60 overflow-y-auto">
@@ -358,8 +322,6 @@ export default function App() {
                                     previewPayee = tx.description;
                                     previewMemo = ""; 
                                 } else if (tx.payee) { 
-                                    // If tx.payee is present (from a payeeField in config), description is always memo,
-                                    // regardless of swapPayeesMemos (as per convertToYNABTransactions logic)
                                     previewMemo = tx.description;
                                 }
 
@@ -374,12 +336,12 @@ export default function App() {
 
                                 return (
                                     <tr key={index} className="hover:bg-slate-50">
-                                    <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-600">{formatDateForDisplay(tx.date)}</td>
+                                    <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-600">
+                                      {YNABFormatter.formatDateForOutput(tx.date, outputDateFormat)}
+                                    </td>
                                     <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-800 font-medium">{previewPayee}</td>
                                     <td className="px-4 py-2.5 whitespace-nowrap text-sm text-slate-800">{previewMemo}</td>
                                     <td className={`px-4 py-2.5 whitespace-nowrap text-sm text-right ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                        {/* Display amount as it is in normalized transaction (negative for outflow, positive for inflow) */}
-                                        {/* YNAB conversion will handle splitting into Outflow/Inflow columns */}
                                         {tx.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </td>
                                     </tr>
