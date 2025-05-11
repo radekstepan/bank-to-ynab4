@@ -28,7 +28,7 @@ function getRowValue(row: any, fieldNameFromConfig?: string): any {
 export class YNABFormatter {
   // Parses input date string based on hint and standardizes to YYYY-MM-DD
   private static formatDate(dateString: string, inputFormatHint?: string): string {
-    let dateObj: Date;
+    let dateObj: Date | undefined = undefined;
 
     // Prioritize specific format hints if provided
     if (inputFormatHint === 'DD/MM/YYYY' && /^\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}$/.test(dateString)) {
@@ -43,19 +43,53 @@ export class YNABFormatter {
         const parts = dateString.split(/[\/\-.]/);
         dateObj = new Date(Date.UTC(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2])));
     } else {
-       // Fallback to direct parsing for other formats (e.g. ISO, 'DD MMM YYYY')
-       // Date constructor handles many formats; UTC is used later to extract parts
-       dateObj = new Date(dateString);
-       // If direct parsing failed and it looks like an Excel date number
-       if (isNaN(dateObj.getTime()) && /^\d{5}$/.test(dateString)) {
-         const excelSerialDate = parseInt(dateString, 10);
-         const baseDate = new Date(Date.UTC(1899, 11, 30)); // Excel base date for serial numbers
-         dateObj = new Date(baseDate.getTime() + excelSerialDate * 24 * 60 * 60 * 1000);
+       // No specific inputFormatHint matched, or no hint provided.
+       // Try to parse it normally first.
+       const initialDateObj = new Date(dateString);
+
+       // Check if dateString is purely numeric (e.g., "44926", "2023")
+       if (/^\d+$/.test(dateString)) {
+         const numericValue = parseInt(dateString, 10);
+         // And if initialDateObj is valid (not NaN)
+         if (!isNaN(initialDateObj.getTime())) {
+           // And if the parsed year is the same as the numeric string value
+           // (this means Date.parse treated it as a year, e.g., new Date("2023") or new Date("44926"))
+           if (initialDateObj.getUTCFullYear() === numericValue) {
+             // If this "year" is in a range typical for Excel serials (e.g. 20000-80000, roughly 1954-2119)
+             // then it was probably an Excel serial misinterpreted as a year by Date.parse.
+             // We choose a range that's less likely to be an actual year someone types.
+             if (numericValue >= 20000 && numericValue <= 80000) { 
+               const baseDate = new Date(Date.UTC(1899, 11, 30)); // Excel base date for serial numbers
+               dateObj = new Date(baseDate.getTime() + numericValue * 24 * 60 * 60 * 1000);
+             } else {
+               // It was parsed as a year (e.g., "2023"), and it's not in the suspicious Excel serial range. Keep it.
+               dateObj = initialDateObj;
+             }
+           } else {
+             // Parsed year is not the same as numericValue OR initialDateObj was for a different kind of date string.
+             // Keep initialDateObj. Example: dateString "01022023" might be parsed to Jan 2 2023 by new Date().
+             dateObj = initialDateObj;
+           }
+         } else {
+           // initialDateObj is NaN from new Date(dateString).
+           // If dateString looks like an Excel serial (4 or 5 digits, common for dates), try parsing it that way.
+           if (/^\d{4,5}$/.test(dateString) && numericValue >= 1 && numericValue < 100000) { // Wider range for NaN fallback
+             const baseDate = new Date(Date.UTC(1899, 11, 30));
+             dateObj = new Date(baseDate.getTime() + numericValue * 24 * 60 * 60 * 1000);
+           } else {
+             // Still NaN, and doesn't look like a typical Excel serial.
+             dateObj = initialDateObj; // Keep the NaN dateObj
+           }
+         }
+       } else {
+         // dateString is not purely numeric (e.g., "Dec 25 2023", "2023-12-25").
+         // Use the result from new Date(dateString).
+         dateObj = initialDateObj;
        }
     }
 
-    if (isNaN(dateObj.getTime())) {
-      console.warn(`Could not parse date: "${dateString}" with inputFormatHint: "${inputFormatHint}". Falling back to original string.`);
+    if (!dateObj || isNaN(dateObj.getTime())) {
+      console.warn(`Could not parse date: "${dateString}" with inputFormatHint: "${inputFormatHint || 'none'}". Falling back to original string.`);
       return dateString; // Return original string if parsing failed
     }
     
@@ -92,7 +126,7 @@ export class YNABFormatter {
   }
 
 
-  static async parseFile(file: File, bankType: string, uiDateFormatHint?: string): Promise<NormalizedTransaction[]> {
+  static async parseFile(file: File, bankType: string, uiDateFormatHint?: string, importStartDate?: string): Promise<NormalizedTransaction[]> {
     const config = bankConfigs[bankType];
     if (!config) {
       throw new Error(`Unsupported bank type: ${bankType}. No configuration found.`);
@@ -154,12 +188,35 @@ export class YNABFormatter {
       return normalizedTx;
     }).filter(Boolean) as NormalizedTransaction[];
     
-    if (transactions.length === 0 && rawData.length > 0) {
-        console.warn("File parsed but no valid transactions extracted. Check field names in bank config (case-insensitive matching is attempted), file structure, skipRows setting, and transformAmount logic.");
+    // Filter transactions by importStartDate if provided
+    let filteredTransactions = transactions;
+    if (importStartDate && importStartDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        console.log(`Filtering transactions from date (inclusive): ${importStartDate}`);
+        filteredTransactions = transactions.filter(tx => {
+            if (!tx.date || !tx.date.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                console.warn(`Transaction has invalid or unparsed date format ('${tx.date}'), cannot reliably filter by start date. Including this transaction:`, tx);
+                return true; // Include transactions with unparseable dates
+            }
+            return tx.date >= importStartDate;
+        });
+        console.log(`Transactions before start date filtering: ${transactions.length}, after: ${filteredTransactions.length}`);
+    }
+
+    if (filteredTransactions.length === 0 && rawData.length > 0) {
+        const originalCount = transactions.length; // Count before date filtering
+        let reason = "Check field names in bank config (case-insensitive matching is attempted), file structure, skipRows setting, and transformAmount logic.";
+        if (importStartDate && importStartDate.match(/^\d{4}-\d{2}-\d{2}$/)) {
+            if (originalCount > 0) {
+                 reason += ` Also, check the 'Import transactions from' date filter ('${importStartDate}'); ${originalCount} transactions were found before this filter was applied.`;
+            } else {
+                 reason += ` The 'Import transactions from' date filter ('${importStartDate}') is active, but no transactions were found even before applying this filter.`;
+            }
+        }
+        console.warn(`File parsed but no valid transactions extracted. ${reason}`);
         console.log("Raw data sample (first few rows with detected headers):", rawData.slice(0,5));
         console.log("Expected field names from config (will be matched case-insensitively):", {date: config.dateField, desc: config.descriptionField, payee: config.payeeField, amt: config.amountField, outflow: config.outflowField, inflow: config.inflowField });
     }
-    return transactions;
+    return filteredTransactions;
   }
 
   private static parseCSV(file: File): Promise<any[]> {

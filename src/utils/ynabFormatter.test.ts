@@ -45,7 +45,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'eqbank');
+      const result = await YNABFormatter.parseFile(file, 'eqbank', bankConfigs.eqbank.dateFormat, undefined);
 
       // Verify
       expect(Papa.parse).toHaveBeenCalled();
@@ -94,7 +94,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.xlsx');
-      const result = await YNABFormatter.parseFile(file, 'amex');
+      const result = await YNABFormatter.parseFile(file, 'amex', bankConfigs.amex.dateFormat, undefined);
 
       // Verify
       expect((YNABFormatter as any).parseXLSX).toHaveBeenCalledWith(file, 12); // amex config has skipRows: 12
@@ -158,13 +158,13 @@ describe('YNABFormatter', () => {
       const file = createMockFile('', 'test.xlsx');
       
       // Test with skipRows = 12 (the default in the config)
-      const result1 = await YNABFormatter.parseFile(file, 'amex');
+      const result1 = await YNABFormatter.parseFile(file, 'amex', bankConfigs.amex.dateFormat, undefined);
       
       // Test with a different skipRows value (simulating a file where the header is at a different position)
       // We'll temporarily modify the amex config
       const originalSkipRows = bankConfigs.amex.skipRows;
       bankConfigs.amex.skipRows = 11; // Set to a different value
-      const result2 = await YNABFormatter.parseFile(file, 'amex');
+      const result2 = await YNABFormatter.parseFile(file, 'amex', bankConfigs.amex.dateFormat, undefined);
       bankConfigs.amex.skipRows = originalSkipRows; // Restore original value
       
       // Verify both results found the correct data
@@ -191,7 +191,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'eqbank');
+      const result = await YNABFormatter.parseFile(file, 'eqbank', bankConfigs.eqbank.dateFormat, undefined);
 
       // Verify
       expect(result).toHaveLength(1);
@@ -212,7 +212,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'eqbank');
+      const result = await YNABFormatter.parseFile(file, 'eqbank', bankConfigs.eqbank.dateFormat, undefined);
 
       // Verify
       expect(result).toHaveLength(1);
@@ -230,7 +230,7 @@ describe('YNABFormatter', () => {
 
       // Execute and verify
       const file = createMockFile('', 'test.csv');
-      await expect(YNABFormatter.parseFile(file, 'eqbank')).rejects.toThrow('CSV parsing error');
+      await expect(YNABFormatter.parseFile(file, 'eqbank', bankConfigs.eqbank.dateFormat, undefined)).rejects.toThrow('CSV parsing error');
     });
 
     it('should handle empty data', async () => {
@@ -241,7 +241,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'eqbank');
+      const result = await YNABFormatter.parseFile(file, 'eqbank', bankConfigs.eqbank.dateFormat, undefined);
 
       // Verify
       expect(result).toHaveLength(0);
@@ -261,7 +261,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'eqbank');
+      const result = await YNABFormatter.parseFile(file, 'eqbank', bankConfigs.eqbank.dateFormat, undefined);
 
       // Verify that a warning was logged about date parsing
       expect(consoleWarnSpy).toHaveBeenCalled();
@@ -275,6 +275,78 @@ describe('YNABFormatter', () => {
 
       // Restore console.warn
       consoleWarnSpy.mockRestore();
+    });
+
+    describe('importStartDate filtering', () => {
+      const mockCsvData = [
+        { 'Transfer date': '01 Jan 2023', Description: 'Older Transaction', Amount: '$10.00' },
+        { 'Transfer date': '15 Jan 2023', Description: 'Boundary Transaction', Amount: '$20.00' },
+        { 'Transfer date': '30 Jan 2023', Description: 'Newer Transaction', Amount: '$30.00' },
+      ];
+
+      beforeEach(() => {
+        (Papa.parse as jest.Mock).mockImplementation((file, options) => {
+          options.complete({ data: mockCsvData, errors: [] });
+        });
+      });
+
+      const file = createMockFile('', 'test.csv');
+      const bankKey = 'eqbank'; // Uses 'DD MMM YYYY' for date parsing
+
+      it('should include all transactions if importStartDate is before all dates', async () => {
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, '2023-01-01');
+        expect(result).toHaveLength(3);
+        expect(result[0].description).toBe('Older Transaction');
+      });
+
+      it('should include transactions on or after importStartDate (boundary)', async () => {
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, '2023-01-15');
+        expect(result).toHaveLength(2);
+        expect(result[0].description).toBe('Boundary Transaction');
+        expect(result[1].description).toBe('Newer Transaction');
+      });
+
+      it('should include only transactions after importStartDate', async () => {
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, '2023-01-16');
+        expect(result).toHaveLength(1);
+        expect(result[0].description).toBe('Newer Transaction');
+      });
+
+      it('should include no transactions if importStartDate is after all dates', async () => {
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, '2023-02-01');
+        expect(result).toHaveLength(0);
+      });
+
+      it('should include all transactions if importStartDate is undefined', async () => {
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, undefined);
+        expect(result).toHaveLength(3);
+      });
+
+      it('should include all transactions if importStartDate is an empty string', async () => {
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, '');
+        expect(result).toHaveLength(3);
+      });
+
+      it('should include transactions with unparseable dates if they cannot be filtered', async () => {
+        const dataWithInvalidDate = [
+          { 'Transfer date': 'invalid-date', Description: 'Invalid Date Tx', Amount: '$5.00' },
+          { 'Transfer date': '15 Jan 2023', Description: 'Valid Date Tx', Amount: '$20.00' },
+        ];
+        (Papa.parse as jest.Mock).mockImplementationOnce((f, opts) => {
+            opts.complete({ data: dataWithInvalidDate, errors: [] });
+        });
+        const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
+        
+        const result = await YNABFormatter.parseFile(file, bankKey, bankConfigs[bankKey].dateFormat, '2023-01-01');
+        expect(result).toHaveLength(2); // Both included, one because date is invalid, one because it's after start date
+        expect(result.find(tx => tx.description === 'Invalid Date Tx')).toBeTruthy();
+        expect(result.find(tx => tx.description === 'Valid Date Tx')).toBeTruthy();
+        
+        expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("Could not parse date: \"invalid-date\""));
+        expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("Transaction has invalid or unparsed date format ('invalid-date')"), expect.anything());
+        
+        consoleWarnSpy.mockRestore();
+      });
     });
   });
 
@@ -455,12 +527,14 @@ describe('YNABFormatter', () => {
         dateField: 'Date',
         descriptionField: 'Description',
         amountField: 'Amount',
-        dateFormat: 'DD/MM/YYYY'
+        dateFormat: 'DD/MM/YYYY' // Explicitly provide bank-specific format
       };
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'testBank');
+      // Pass the bank-specific format as uiDateFormatHint, or rely on parseFile to pick it up from config
+      const result = await YNABFormatter.parseFile(file, 'testBank', 'DD/MM/YYYY', undefined);
+
 
       // Verify
       expect(result[0].date).toBe('2023-12-31');
@@ -491,7 +565,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'testBank');
+      const result = await YNABFormatter.parseFile(file, 'testBank', 'MM/DD/YYYY', undefined);
 
       // Verify
       expect(result[0].date).toBe('2023-12-31');
@@ -522,7 +596,7 @@ describe('YNABFormatter', () => {
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'testBank');
+      const result = await YNABFormatter.parseFile(file, 'testBank', 'YYYY/MM/DD', undefined);
 
       // Verify
       expect(result[0].date).toBe('2023-12-31');
@@ -540,7 +614,7 @@ describe('YNABFormatter', () => {
       // Setup - create a mock implementation for parseCSV that returns data with Excel date
       const originalParseCSV = (YNABFormatter as any).parseCSV;
       (YNABFormatter as any).parseCSV = jest.fn().mockResolvedValue([
-        { 'Date': '44926', 'Description': 'Test Transaction', 'Amount': '100.00' }
+        { 'Date': '44926', 'Description': 'Test Transaction', 'Amount': '100.00' } // 44926 = Dec 31, 2022
       ]);
       
       // Create a console.warn spy to check if any warnings are logged
@@ -553,20 +627,21 @@ describe('YNABFormatter', () => {
         dateField: 'Date',
         descriptionField: 'Description',
         amountField: 'Amount'
+        // No dateFormat provided, so formatDate will try its fallbacks
       };
 
       // Execute
       const file = createMockFile('', 'test.csv');
-      const result = await YNABFormatter.parseFile(file, 'testBank');
+      const result = await YNABFormatter.parseFile(file, 'testBank', undefined, undefined);
 
-      // Verify - we're not testing the exact date conversion here, just that it doesn't fail
-      // and doesn't log a warning about failing to parse the date
+      // Verify 
       expect(result.length).toBeGreaterThan(0);
       expect(result[0].description).toBe('Test Transaction');
+      expect(result[0].date).toBe('2022-12-31'); // Check if Excel date was parsed correctly
       
-      // Check that no warnings were logged about date parsing failures
+      // Check that no warnings were logged about date parsing failures related to this specific date
       const dateWarningCalls = consoleWarnSpy.mock.calls.filter(
-        call => call[0] && typeof call[0] === 'string' && call[0].includes('Could not parse date')
+        call => call[0] && typeof call[0] === 'string' && call[0].includes('Could not parse date: "44926"')
       );
       expect(dateWarningCalls.length).toBe(0);
 

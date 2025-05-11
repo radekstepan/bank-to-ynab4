@@ -20,6 +20,7 @@ export default function App() {
 
   const [selectedAccount, setSelectedAccount] = useState<string>(initialBankOptions[0]?.value || '');
   const [outputDateFormat, setOutputDateFormat] = useState('Day/Month/Year'); 
+  const [importStartDate, setImportStartDate] = useState<string>(''); // YYYY-MM-DD or empty for all
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'info' | 'success' | 'error' | 'warning', text: string} | null>(null);
@@ -49,7 +50,8 @@ export default function App() {
     fileToParse: File, 
     accountToUse: string, 
     uiDateHint: string, 
-    isReparse: boolean = false
+    isReparse: boolean = false,
+    currentImportStartDate?: string // New parameter for start date
   ) => {
     if (!accountToUse && availableBankOptions.length > 0) {
       setStatusMessage({type: 'warning', text: "Please select a valid bank account type first."});
@@ -70,13 +72,18 @@ export default function App() {
     setParsedTransactions([]); 
 
     try {
-        const transactions = await YNABFormatter.parseFile(fileToParse, accountToUse, uiDateHint);
+        const transactions = await YNABFormatter.parseFile(fileToParse, accountToUse, uiDateHint, currentImportStartDate);
 
         if (transactions.length === 0) {
             setParsedTransactions([]);
+            let warningText = `No transactions found in ${fileToParse.name} with current settings.`;
+            if (currentImportStartDate) {
+                warningText += ` Check the 'Import from date' (${YNABFormatter.formatDateForOutput(currentImportStartDate, outputDateFormat)}).`;
+            }
+            warningText += ` Also check file content, bank selection, input date format, or bank configuration (skipRows, field names).`;
             setStatusMessage({
                 type: 'warning',
-                text: `No transactions found in ${fileToParse.name} with current settings. Check file, bank selection, input date format, or bank configuration (skipRows, field names).`
+                text: warningText
             });
         } else {
             setParsedTransactions(transactions);
@@ -101,7 +108,7 @@ export default function App() {
       if (file.name.endsWith('.csv') || file.name.endsWith('.xls') || file.name.endsWith('.xlsx')) {
         setSelectedFile(file); 
         setSelectedFileName(file.name);
-        await processAndSetTransactions(file, selectedAccount, outputDateFormat, false);
+        await processAndSetTransactions(file, selectedAccount, outputDateFormat, false, importStartDate);
       } else {
         setSelectedFile(null);
         setSelectedFileName('');
@@ -158,6 +165,7 @@ export default function App() {
     setStatusMessage(null);
     setIsProcessing(false);
     setSwapPayeesMemos(false); 
+    setImportStartDate('');
   };
 
   // Removed formatDateForDisplay, will use YNABFormatter.formatDateForOutput directly in JSX
@@ -223,7 +231,7 @@ export default function App() {
                                 const newAccount = e.target.value;
                                 setSelectedAccount(newAccount); 
                                 if (selectedFile) {
-                                    await processAndSetTransactions(selectedFile, newAccount, outputDateFormat, true);
+                                    await processAndSetTransactions(selectedFile, newAccount, outputDateFormat, true, importStartDate);
                                 } else {
                                      if (statusMessage && statusMessage.text.includes("Please select a valid bank account type first.")) {
                                         if (newAccount || availableBankOptions.length === 0) { 
@@ -257,7 +265,7 @@ export default function App() {
                             const newDateFormat = e.target.value;
                             setOutputDateFormat(newDateFormat); 
                             if (selectedFile && selectedAccount) {
-                                processAndSetTransactions(selectedFile, selectedAccount, newDateFormat, true);
+                                processAndSetTransactions(selectedFile, selectedAccount, newDateFormat, true, importStartDate);
                             }
                         }}
                         disabled={isProcessing}
@@ -270,6 +278,27 @@ export default function App() {
                       <ChevronDown className="w-5 h-5 text-slate-500 absolute top-1/2 right-3 -translate-y-1/2 pointer-events-none" />
                     </div>
                      <p className="text-xs text-slate-500 mt-1">Used for YNAB output CSV and as a hint for parsing input file dates if bank-specific format is not precise.</p>
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label htmlFor="importStartDate" className="block text-sm font-medium text-slate-700 mb-1">
+                        Import transactions from (inclusive):
+                    </label>
+                    <input
+                        type="date"
+                        id="importStartDate"
+                        value={importStartDate}
+                        onChange={(e) => {
+                        const newStartDate = e.target.value; // Format: YYYY-MM-DD or empty string
+                        setImportStartDate(newStartDate);
+                        if (selectedFile && selectedAccount) {
+                            processAndSetTransactions(selectedFile, selectedAccount, outputDateFormat, true, newStartDate);
+                        }
+                        }}
+                        disabled={isProcessing}
+                        className="w-full p-2.5 text-slate-700 bg-white border border-slate-400 rounded-md shadow-sm outline-none focus:border-blue-500"
+                    />
+                    <p className="text-xs text-slate-500 mt-1">Leave blank or clear to import all transactions.</p>
                   </div>
 
                   <div className="md:col-span-2">
@@ -296,6 +325,7 @@ export default function App() {
                     <h2 className="text-xl font-semibold text-slate-700 mb-1">Import Preview</h2>
                     <p className="text-xs text-slate-600 mb-2">
                       Preview based on selected options. Date format matches output selection.
+                      {importStartDate && ` Transactions shown are on or after ${YNABFormatter.formatDateForOutput(importStartDate, outputDateFormat)}.`}
                     </p>
                     <div className="border border-slate-400 rounded-md overflow-hidden">
                       <div className="max-h-60 overflow-y-auto">
