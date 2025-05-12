@@ -79,8 +79,9 @@ The built files will be in the `dist` directory, ready to be deployed to any sta
 ## 🏦 Supported Banks
 
 Currently supported bank formats:
-- EQ Bank (CSV)
 - AMEX (XLS)
+- EQ Bank (CSV)
+- Scotiabank (CSV)
 
 ## 🧩 Adding New Bank Formats
 

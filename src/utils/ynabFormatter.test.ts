@@ -277,6 +277,101 @@ describe('YNABFormatter', () => {
       consoleWarnSpy.mockRestore();
     });
 
+    // --- Scotiabank Specific Tests ---
+    describe('Scotiabank CSV Parsing', () => {
+      const bankKey = 'scotiabank';
+      const scotiabankDateFormat = bankConfigs[bankKey].dateFormat; // 'YYYY-MM-DD'
+
+      const mockScotiabankData = [
+        { Filter: "Some filter data", Date: "2025-05-10", Description: "taverna greka", "Sub-description": "New Westminstbc", Status: "posted", "Type of Transaction": "Debit", Amount: "37.88" },
+        { Filter: "", Date: "2025-05-09", Description: "no frills", "Sub-description": "Vancouver Bc", Status: "posted", "Type of Transaction": "Debit", Amount: "49.67" },
+        { Filter: "", Date: "2025-04-29", Description: "thank you", "Sub-description": "U", Status: "posted", "Type of Transaction": "Credit", Amount: "-5124.07" },
+        { Filter: "", Date: "2025-04-23", Description: "ebay", "Sub-description": "San Jose Ca", Status: "posted", "Type of Transaction": "Credit", Amount: "-47.92" },
+        { Filter: "", Date: "2025-05-08", Description: "netflix", "Sub-description": "", Status: "posted", "Type of Transaction": "Debit", Amount: "23.99" }, // Test empty sub-description
+      ];
+
+      beforeEach(() => {
+        (Papa.parse as jest.Mock).mockImplementation((file, options) => {
+          options.complete({ data: mockScotiabankData, errors: [] });
+        });
+      });
+
+      it('should correctly parse Scotiabank debit transactions', async () => {
+        const file = createMockFile('', 'scotia.csv');
+        const result = await YNABFormatter.parseFile(file, bankKey, scotiabankDateFormat, undefined);
+        
+        const debitTx1 = result.find(tx => tx.description === "taverna greka");
+        expect(debitTx1).toBeDefined();
+        expect(debitTx1?.date).toBe("2025-05-10");
+        expect(debitTx1?.payee).toBe("New Westminstbc");
+        expect(debitTx1?.amount).toBe(-37.88); // Debits are outflows (negative)
+
+        const debitTx2 = result.find(tx => tx.description === "no frills");
+        expect(debitTx2).toBeDefined();
+        expect(debitTx2?.date).toBe("2025-05-09");
+        expect(debitTx2?.payee).toBe("Vancouver Bc");
+        expect(debitTx2?.amount).toBe(-49.67);
+      });
+
+      it('should correctly parse Scotiabank credit transactions', async () => {
+        const file = createMockFile('', 'scotia.csv');
+        const result = await YNABFormatter.parseFile(file, bankKey, scotiabankDateFormat, undefined);
+
+        const creditTx1 = result.find(tx => tx.description === "thank you");
+        expect(creditTx1).toBeDefined();
+        expect(creditTx1?.date).toBe("2025-04-29");
+        expect(creditTx1?.payee).toBe("U");
+        expect(creditTx1?.amount).toBe(5124.07); // Credits are inflows (positive)
+
+        const creditTx2 = result.find(tx => tx.description === "ebay");
+        expect(creditTx2).toBeDefined();
+        expect(creditTx2?.date).toBe("2025-04-23");
+        expect(creditTx2?.payee).toBe("San Jose Ca");
+        expect(creditTx2?.amount).toBe(47.92);
+      });
+
+      it('should handle empty Sub-description (payee) correctly', async () => {
+        const file = createMockFile('', 'scotia.csv');
+        const result = await YNABFormatter.parseFile(file, bankKey, scotiabankDateFormat, undefined);
+        
+        const netflixTx = result.find(tx => tx.description === "netflix");
+        expect(netflixTx).toBeDefined();
+        expect(netflixTx?.date).toBe("2025-05-08");
+        expect(netflixTx?.payee).toBeUndefined(); // Or "" depending on implementation, let's assume undefined if empty/not present
+        expect(netflixTx?.amount).toBe(-23.99);
+      });
+
+      it('should filter Scotiabank transactions by importStartDate', async () => {
+        const file = createMockFile('', 'scotia.csv');
+        const importStartDate = "2025-05-09"; // YYYY-MM-DD
+        const result = await YNABFormatter.parseFile(file, bankKey, scotiabankDateFormat, importStartDate);
+        
+        expect(result).toHaveLength(2); // "taverna greka" and "no frills"
+        expect(result.find(tx => tx.description === "taverna greka")).toBeDefined();
+        expect(result.find(tx => tx.description === "no frills")).toBeDefined();
+        expect(result.find(tx => tx.description === "thank you")).toBeUndefined();
+      });
+
+       it('should correctly parse Scotiabank CSV with skipRows: 0 and header:true', async () => {
+        // Papa.parse mock is already set up in beforeEach to return mockScotiabankData.
+        // The YNABFormatter.parseCSV method is called by parseFile, and it uses { header: true }.
+        // The slice(config.skipRows || 0) in parseFile means for Scotiabank (skipRows:0), it starts from the first object.
+        const file = createMockFile('Date,Amount\n2023-01-01,10.00', 'scotia.csv'); // Content doesn't matter due to mock
+        
+        const result = await YNABFormatter.parseFile(file, bankKey, scotiabankDateFormat, undefined);
+        expect(result.length).toBe(mockScotiabankData.length); 
+        expect(Papa.parse).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ header: true })
+        );
+        // Further checks on the first item to ensure it's processed correctly
+        expect(result[0].description).toBe("taverna greka");
+        expect(result[0].date).toBe("2025-05-10");
+        expect(result[0].amount).toBe(-37.88);
+      });
+    });
+    // --- End Scotiabank Specific Tests ---
+
     describe('importStartDate filtering', () => {
       const mockCsvData = [
         { 'Transfer date': '01 Jan 2023', Description: 'Older Transaction', Amount: '$10.00' },

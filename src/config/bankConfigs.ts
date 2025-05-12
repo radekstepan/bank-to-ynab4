@@ -50,5 +50,34 @@ export const bankConfigs: Record<string, BankParseConfig> = {
       }
       return 0;
     }
+  },
+  scotiabank: {
+    label: 'Scotiabank (CSV)',
+    // CSV Fields: Filter,Date,Description,Sub-description,Status,Type of Transaction,Amount
+    // Header is the first line. Data starts from the second line.
+    skipRows: 0, // PapaParse `header: true` uses the first line as headers.
+    dateField: 'Date',
+    descriptionField: 'Description',    // Will be YNAB Memo if Sub-description is Payee
+    payeeField: 'Sub-description',      // Will be YNAB Payee
+    amountField: 'Amount',              // This field contains the numeric value
+    // transactionTypeField: 'Type of Transaction', // Not directly used by transformAmount signature, but Amount reflects type
+    dateFormat: 'YYYY-MM-DD',         // e.g., "2025-05-10"
+    transformAmount: (_outflow?: string, _inflow?: string, amountStr?: string) => {
+      // Scotiabank CSV sample:
+      // Debit:  Type="Debit", Amount="37.88"   -> Internal goal: -37.88
+      // Credit: Type="Credit", Amount="-5124.07" -> Internal goal: +5124.07
+      if (typeof amountStr === 'string') {
+        const cleanedAmount = amountStr.replace(/\$/g, '').replace(/,/g, '');
+        const num = parseFloat(cleanedAmount);
+        if (isNaN(num)) {
+          return 0;
+        }
+        // If num is positive (e.g., "37.88" for Debit), it's an outflow, return -num.
+        // If num is negative (e.g., "-5124.07" for Credit), it's an inflow, return -num (to make it positive).
+        // This effectively means all amounts are multiplied by -1 to fit the internal positive=inflow, negative=outflow convention.
+        return -num;
+      }
+      return 0;
+    }
   }
 };
